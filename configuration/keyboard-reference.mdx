@@ -1,0 +1,72 @@
+---
+title: 'SysWatch keyboard shortcuts and key bindings'
+description: 'Full keyboard reference for SysWatch: tab navigation, row selection, sort cycling, session scrubbing, pause, and quit — organized by action group.'
+---
+
+Every action in SysWatch is driven by the keyboard. There is no mouse interaction. The footer bar at the bottom of the screen shows a condensed hotkey summary; this page is the complete reference organized by action group.
+
+<Tip>
+  You can skip directly to any tab at launch using the `--tab` flag — for example, `syswatch --tab procs` — so you do not need to navigate manually when you already know what you want to look at. See [CLI flags](/configuration/cli-flags) for the full list of accepted values.
+</Tip>
+
+## Tab navigation
+
+Press a number or symbol key to jump directly to that tab. Use Tab and Shift-Tab to step through tabs in order.
+
+| Key | Tab | Description |
+|---|---|---|
+| `1` | Overview | Summary dashboard of all subsystems |
+| `2` | CPU | Per-core usage, frequency, load average |
+| `3` | Memory | RAM, swap, memory pressure |
+| `4` | Disks | Aggregate disk IO rates |
+| `5` | Filesystems | Mounted filesystem usage and inode stats |
+| `6` | Procs | Running process list with CPU/RSS/IO |
+| `7` | GPU | GPU utilization and memory |
+| `8` | Power | Battery, charge rate, power supply info |
+| `9` | Services | System services (launchctl / systemctl) |
+| `0` | Net | Network interface counters and rates |
+| `-` (minus) | Timeline | Session ring scrubber with sparklines |
+| `+` or `=` | Insights | Plain-English anomaly cards |
+| `Tab` | — | Advance to the next tab (wraps around) |
+| `Shift-Tab` | — | Go back to the previous tab (wraps around) |
+
+The `+` key and the `=` key (same physical key on most keyboards) both navigate to the Insights tab.
+
+## Row selection and sorting
+
+These keys are context-sensitive: they apply only when the Procs or Services tab is active.
+
+| Key | Action | Applicable tabs |
+|---|---|---|
+| `↑` | Select the previous row | Procs, Services |
+| `↓` | Select the next row | Procs, Services |
+| `s` | Cycle to the next sort column | Procs, Services |
+
+**Procs sort cycle:** cpu → rss → io → start → name (wraps back to cpu)
+
+**Services sort cycle:** name → status → pid (wraps back to name)
+
+Changing the sort column resets the selection to the top of the list.
+
+## Session scrubbing
+
+Scrubbing rewinds or fast-forwards the entire application state through the session ring buffer. All tabs — not just Timeline — display historical data when a scrub offset is active. The Timeline tab is the most useful place to scrub because it shows the ring contents visually, but the controls work from any tab.
+
+| Key | Action |
+|---|---|
+| `←` (Left) | Step backward by one tick (older data) |
+| `→` (Right) | Step forward by one tick (newer data) |
+| `Home` | Jump to the oldest sample in the session ring |
+| `End` | Return to live (clears any scrub offset) |
+
+The session ring holds the last 120 ticks. At the default 1 Hz tick rate that is a 2-minute window.
+
+## Playback control
+
+| Key | Action |
+|---|---|
+| `p` | Toggle pause — freezes collection and display; keypress events still work |
+| `q` | Quit SysWatch |
+| `Ctrl-C` | Quit SysWatch |
+
+While paused, the header shows a `PAUSED` indicator. Scrubbing still works during a pause.

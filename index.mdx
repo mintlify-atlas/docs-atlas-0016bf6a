@@ -1,133 +1,79 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
-icon: 'star'
+title: "SysWatch: Single-host system diagnostics TUI"
+description: "SysWatch replaces htop, iostat, vm_stat, and a notebook of one-liners with twelve diagnostic tabs, a session scrubber, and plain-English anomaly detection."
 ---
 
-## Setting up
+SysWatch is a read-only, single-host diagnostics tool for macOS and Linux. Open it when something feels off — before you reach for five separate tools. Twelve tabs cover every subsystem on one box: CPU, memory, disks, filesystems, processes, GPU, power, services, networking, plus a session Timeline scrubber and an Insights anomaly engine that surfaces what's wrong in plain English and points you to the right tab.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Build from source or install via Homebrew. Requires only Rust 1.75+ on Linux; links system frameworks on macOS.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Launch SysWatch and learn the core keyboard shortcuts to navigate all twelve tabs in under two minutes.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Tabs Reference" icon="table-columns" href="/tabs/overview">
+    Deep-dive docs for every tab — Overview, CPU, Memory, Disks, Filesystems, Procs, GPU, Power, Services, Net, Timeline, and Insights.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Insights & Anomaly Detection" icon="triangle-exclamation" href="/features/anomaly-detection">
+    How SysWatch detects swap thrash, runaway processes, disk pressure, zombie parties, and more — all without daemons.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## What SysWatch replaces
 
-Everything you need to create world-class documentation.
+| Tab | Commands it replaces |
+|---|---|
+| Overview | Dashboard view of all subsystems at a glance |
+| CPU | `htop` CPU panel, `top -d`, `mpstat` |
+| Memory | `free`, `vm_stat`, `htop` mem panel |
+| Disks | `iostat`, `iotop` aggregate |
+| Filesystems | `df -h`, `df -i`, `mount` |
+| Procs | `htop`, `ps auxf`, `pstree` |
+| GPU | `ioreg AGXAccelerator` / `/sys/class/drm` |
+| Power | `pmset`, `ioreg AppleSmartBattery` / `/sys/class/power_supply` |
+| Services | `launchctl list` / `systemctl list-units` |
+| Net | `nettop`, `iftop` |
+| Timeline | No equivalent — session log with scrubber |
+| Insights | No equivalent — plain-English anomaly cards |
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+## Get started
 
-## Make your content agent ready
+<Steps>
+  <Step title="Install SysWatch">
+    Clone the repository and build with Cargo, or tap the Homebrew formula.
 
-Make your docs work for humans and AI agents alike.
+    ```bash
+    git clone https://github.com/matthart1983/syswatch.git && cd syswatch
+    cargo build --release
+    ```
+  </Step>
+  <Step title="Launch the TUI">
+    Run the binary. SysWatch starts on the Overview tab at 1 Hz by default.
 
-<Columns cols={2}>
-  <Card
-    title="Prompt component"
-    icon="robot"
-    href="/agent-ready/prompt"
-  >
-    Embed shareable AI prompts readers can copy or open in Cursor.
-  </Card>
-  <Card
-    title="Visibility"
-    icon="eye"
-    href="/agent-ready/visibility"
-  >
-    Show different content to humans and agents reading your docs.
-  </Card>
-  <Card
-    title="Contextual menu"
-    icon="bolt"
-    href="/agent-ready/contextual"
-  >
-    Give readers one-click access to Claude, ChatGPT, Cursor, and more.
-  </Card>
-  <Card
-    title="AI coding tools"
-    icon="wand-magic-sparkles"
-    href="/ai-tools/claude-code"
-  >
-    Set up Claude Code, Cursor, or Windsurf with Mintlify's skill.
-  </Card>
-</Columns>
+    ```bash
+    ./target/release/syswatch
+    ```
+  </Step>
+  <Step title="Navigate tabs">
+    Press `1`–`9`, `0`, `-`, or `+` to jump to any of the twelve tabs. Use `Tab` and `Shift-Tab` to cycle through them sequentially.
+  </Step>
+  <Step title="Check the Insights tab">
+    Press `+` to open Insights. Any active anomaly cards show severity (WARN/CRIT), a plain-English title, and a suggested tab to investigate further.
+  </Step>
+</Steps>
 
-## Need inspiration?
-
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<CardGroup cols={2}>
+  <Card title="Session scrubbing" icon="clock-rotate-left" href="/features/session-scrubbing">
+    Use the Timeline tab to rewind every panel — all twelve tabs transparently show historical state.
+  </Card>
+  <Card title="Platform notes" icon="microchip" href="/features/platform-notes">
+    What SysWatch shows on macOS Apple Silicon vs. Intel vs. Linux, and what requires sudo.
+  </Card>
+  <Card title="CLI flags" icon="terminal" href="/configuration/cli-flags">
+    Configure tick rate and start tab from the command line.
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/architecture/overview">
+    How SysWatch's collector, ring buffer, and renderer fit together.
+  </Card>
+</CardGroup>

@@ -1,0 +1,85 @@
+{
+  "projectType": "cli-tool",
+  "projectName": "SysWatch",
+  "projectDescription": "A single-host system diagnostics TUI for macOS and Linux with twelve tabs covering CPU, memory, disks, processes, GPU, power, services, networking, a session Timeline scrubber, and a plain-English Insights anomaly engine.",
+  "theme": "aspen",
+  "primaryColor": "#2ba97d",
+  "lightColor": "#1c6c54",
+  "darkColor": "#0c0d0d",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Tabs Reference",
+            "pages": [
+              "tabs/overview",
+              "tabs/cpu-memory",
+              "tabs/disks-filesystems",
+              "tabs/processes-services",
+              "tabs/gpu-power",
+              "tabs/network",
+              "tabs/timeline",
+              "tabs/insights"
+            ]
+          },
+          {
+            "group": "Features",
+            "pages": [
+              "features/session-scrubbing",
+              "features/anomaly-detection",
+              "features/platform-notes"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/cli-flags",
+              "configuration/keyboard-reference",
+              "configuration/optional-features"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/data-model"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Twelve diagnostic tabs: Overview, CPU, Memory, Disks, Filesystems, Processes, GPU, Power, Services, Network, Timeline, and Insights",
+    "Plain-English Insights tab with heuristic anomaly detection (swap thrash, runaway processes, disk full, memory pressure, high load, zombie parties)",
+    "Session-wide Timeline scrubber — rewind every panel to any point in the current session",
+    "Cross-platform: macOS (Apple Silicon + Intel) and Linux, no system dependencies beyond Rust",
+    "Transparent about platform limits — shows what requires sudo without faking or prompting",
+    "Shared netwatch-sdk parsers for disk IO and network interface counters",
+    "Optional NVIDIA GPU stats (gpu-nvidia feature) and SMART disk health (smart feature)",
+    "Low CPU overhead — targets <0.5% at idle with a configurable tick rate"
+  ],
+  "publicApiSurface": [
+    "syswatch — default 1 Hz tick, starts on Overview tab",
+    "syswatch --tick <ms> — set fast-loop refresh interval in milliseconds",
+    "syswatch --tab <name> — start on a named tab (overview, cpu, memory, disks, fs, procs, gpu, power, services, net, timeline, insights)",
+    "Keys 1-9, 0, -, + — jump directly to any of the twelve tabs",
+    "Tab / Shift-Tab — cycle through tabs",
+    "↑ / ↓ — select row in Procs and Services tabs",
+    "s — cycle sort order in Procs (cpu, rss, io, start, name) and Services (name, status, pid)",
+    "← / → — scrub session backward / forward in Timeline",
+    "Home / End — jump to oldest sample or return to live",
+    "p — pause collection",
+    "q / Ctrl-C — quit"
+  ]
+}

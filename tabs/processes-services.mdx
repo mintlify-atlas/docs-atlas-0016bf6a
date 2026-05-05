@@ -1,0 +1,147 @@
+---
+title: "Processes & Services tabs — SysWatch reference"
+description: "Key 6 shows a sortable process table with per-process drill-in. Key 9 lists every launchctl or systemctl service with status, PID, and exit code."
+---
+
+The Processes tab (key `6`) and Services tab (key `9`) give you a read-only view of every running process and every managed service on the host. SysWatch never kills, renices, or restarts anything — these tabs are purely observational.
+
+<Tabs>
+  <Tab title="Processes (key 6)">
+
+## What the table shows
+
+The Processes tab renders a full-terminal table of every process returned by the collector. Each row contains:
+
+| Column | Field | Notes |
+|--------|-------|-------|
+| PID | `pid` | Process ID |
+| PPID | `ppid` | Parent process ID |
+| USER | `user` | Owner (truncated to 14 chars) |
+| %CPU | `cpu_pct` | Instantaneous CPU usage, highlighted yellow at ≥ 30% |
+| RSS | `mem_rss` | Resident set size (physical RAM in use) |
+| VIRT | `mem_virt` | Virtual address space size |
+| STATE | `state` | Single character; see table below |
+| IO/s | `io_rate` | Combined read + write bytes/sec since the previous tick |
+| COMMAND | `name` | Short process name |
+
+### State characters
+
+| Char | Meaning |
+|------|---------|
+| `R` | Running — on CPU right now |
+| `S` | Sleeping — waiting on I/O or a timer |
+| `I` | Idle (macOS kernel threads) |
+| `Z` | Zombie — exited but not yet reaped by its parent |
+| other | Platform-specific (stopped, traced, etc.) |
+
+The state column is color-coded: `R` is green, `Z` is red, everything else is dimmed.
+
+## Sorting
+
+Press `s` to cycle through sort modes. The active mode is highlighted in the sort strip at the top of the tab. Changing sort resets row selection to the first row.
+
+| Mode | Sorts by | Direction |
+|------|----------|-----------|
+| `cpu` | `cpu_pct` | Descending — highest CPU first |
+| `rss` | `mem_rss` | Descending — largest resident set first |
+| `io` | `io_rate` | Descending — most active I/O first |
+| `start` | `start_time` | Descending — newest process first |
+| `name` | `name` | Ascending, case-insensitive |
+
+## Row selection and drill-in
+
+Use `↑` / `↓` to move the selection highlight. The panel at the bottom of the screen expands the selected process into a detail view showing:
+
+- Full command line (`cmd`)
+- Parent PID (`ppid`)
+- Owner (`user`)
+- RSS and virtual memory
+- CPU percentage
+- I/O rate
+- Start time (local time, formatted `YYYY-MM-DD HH:MM:SS`)
+
+## Runaway-process heuristic
+
+SysWatch's Insights tab uses an EWMA (exponentially weighted moving average, α = 0.3) over each process's `cpu_pct` across recent ticks to decide whether a process is genuinely running away. A single transient spike — a compile burst, a backup flush — will not trigger the heuristic because it takes roughly five ticks for the EWMA to stabilize at a new level.
+
+<Note>
+The EWMA is maintained per PID in `History.proc_cpu_ewma`. A PID that disappears from the snapshot is pruned from the map immediately — there is no stale data from exited processes.
+</Note>
+
+## Replaces
+
+`htop`, `ps auxf`, `pstree`
+
+  </Tab>
+  <Tab title="Services (key 9)">
+
+## What the table shows
+
+The Services tab queries the platform service manager once every five seconds (the slow-loop cadence) and displays the full list. Each row shows:
+
+| Column | Field | Notes |
+|--------|-------|-------|
+| STATUS | `status` | `RUN`, `IDLE`, `FAIL`, or `?` |
+| PID | `pid` | Present only while the service is running |
+| EXIT | `exit_code` | Last exit code; `—` when the service is currently running |
+| NAME | `name` | Service label (`com.apple.*` on macOS, `*.service` on Linux) |
+
+The sort strip shows a count summary: total services, running, idle, failed, and unknown. Failed counts are highlighted red when non-zero.
+
+### Status values
+
+| Value | Meaning |
+|-------|---------|
+| `Running` | Service has an active PID |
+| `Idle` | Service is registered but not currently running (clean exit or never launched) |
+| `Failed` | Service exited with a non-zero code and has no active PID |
+| `Unknown` | Platform could not determine status |
+
+### Platform mapping
+
+**macOS** (`launchctl list`): A row with a PID is `Running`. No PID plus a non-zero exit code is `Failed`. No PID plus exit code `0` is `Idle`. The `detail` field reports human-readable exit info — for example, `killed by signal 9` for a `−9` status code, which is common during system relaunch cycles.
+
+**Linux** (`systemctl list-units --type=service --all`): `active/running` → `Running`; `active/exited` or `inactive` → `Idle`; `failed` → `Failed`. The `detail` field carries the raw `active/sub — description` string from systemctl.
+
+## Sorting
+
+Press `s` to cycle sort modes. Changing sort resets row selection to the first row.
+
+| Mode | Sort order |
+|------|-----------|
+| `name` | Alphabetical ascending |
+| `status` | Failed → Running → Idle → Unknown, then by name within each group |
+| `pid` | Ascending numeric PID; services with no PID sort after those with one, then by name |
+
+## Row selection and detail panel
+
+Use `↑` / `↓` to move the selection. The detail panel below the table expands the selected service to show status, PID, exit code, and the platform-specific `detail` string.
+
+## Replaces
+
+`launchctl list`, `systemctl list-units`
+
+  </Tab>
+</Tabs>
+
+## Keyboard shortcuts
+
+| Key | Action | Applies to |
+|---|---|---|
+| `6` | Jump to Procs tab | — |
+| `9` | Jump to Services tab | — |
+| `↑` | Select previous row | Procs, Services |
+| `↓` | Select next row | Procs, Services |
+| `s` | Cycle sort column | Procs, Services |
+| `Tab` / `Shift-Tab` | Cycle to next / previous tab | — |
+| `←` / `→` | Scrub session history | All tabs |
+| `p` | Pause live collection | — |
+
+<CardGroup cols={2}>
+  <Card title="Insights anomaly detection" icon="triangle-exclamation" href="/features/anomaly-detection">
+    How the runaway-process and zombie-party heuristics use the process data.
+  </Card>
+  <Card title="Session scrubbing" icon="clock-rotate-left" href="/features/session-scrubbing">
+    Rewind the process table to any point in the last two minutes.
+  </Card>
+</CardGroup>

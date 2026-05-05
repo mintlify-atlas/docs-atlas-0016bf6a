@@ -1,0 +1,154 @@
+---
+title: 'CPU & Memory Tabs — Utilization, Load, and RAM Pressure'
+description: 'Deep-dive into CPU aggregate usage, per-core bars, load averages, and memory pressure including swap — replacing htop, mpstat, free, and vm_stat in one screen.'
+---
+
+The CPU tab (key `2`) and Memory tab (key `3`) provide the detail behind the summary tiles on the Overview. Together they replace the tools you would normally open side-by-side: `htop` for CPU, `mpstat` for per-core breakdown, `free` or `vm_stat` for memory, and a separate terminal for load averages. All of that is on these two tabs, live and color-coded.
+
+<Tabs>
+  <Tab title="CPU (key 2)">
+
+## CPU tab
+
+Press `2` to open the CPU tab, or `Tab`/`Shift-Tab` to cycle to it.
+
+### Aggregate panel
+
+The top section spans the full width and is itself split into two columns:
+
+- **Sparkline (left, ~70 % width):** A block-character sparkline drawn from the ring buffer of the last ~120 seconds of aggregate CPU usage. Taller rows mean higher utilization. Each row of the sparkline represents the same history window, giving the chart visual depth in the terminal. Use `←`/`→` to scrub the session and watch the sparkline update in place.
+
+- **Counters (right, ~30 % width):** Four key–value lines:
+
+  | Field | Description |
+  |-------|-------------|
+  | `usage` | Aggregate usage across all logical cores, 0–100 %. Source: `CpuTick.usage_pct`. |
+  | `load` | System load averages at 1 min / 5 min / 15 min. Sources: `CpuTick.load_1`, `CpuTick.load_5`, `CpuTick.load_15`. |
+  | `cores` | Number of logical cores. Derived from `CpuTick.per_core.len()`. |
+  | `model` | CPU model string reported by the OS. Source: `HostInfo.cpu_model`. |
+
+Load averages are the Unix scheduler queue depth — a load of 1.0 on a 4-core machine means 25 % saturation. Values above the core count indicate queued work.
+
+### Per-core utilization panel
+
+The bottom section lists every logical core as a single row:
+
+```
+c  0  ████████████████░░░░░░░░░░░   72.4%
+c  1  ████░░░░░░░░░░░░░░░░░░░░░░░   18.1%
+```
+
+Each row shows the core index, a proportional block bar, and the exact percentage. Color thresholds match the Overview KPI tile:
+
+| Range | Color |
+|-------|-------|
+| < 60 % | Green |
+| 60 – 85 % | Yellow |
+| ≥ 85 % | Red |
+
+Source field: `CpuTick.per_core` — a `Vec<f32>` where each element is a logical core's usage in the range 0–100.
+
+### Data model
+
+```rust
+pub struct CpuTick {
+    pub load_1: f32,           // 1-minute load average
+    pub load_5: f32,           // 5-minute load average
+    pub load_15: f32,          // 15-minute load average
+    pub usage_pct: f32,        // aggregate utilization, 0..100
+    pub per_core: Vec<f32>,    // per-logical-core utilization, 0..100
+}
+```
+
+### Replaces
+
+`htop` CPU panel · `top -d` · `mpstat -P ALL`
+
+  </Tab>
+  <Tab title="Memory (key 3)">
+
+## Memory tab
+
+Press `3` to open the Memory tab, or `Tab`/`Shift-Tab` to cycle to it.
+
+### RAM panel
+
+The top panel shows current RAM state as a header line and a full-width block bar:
+
+```
+used 6.2 GiB / 16.0 GiB   (38.8%)    available 9.2 GiB
+████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+```
+
+Color thresholds for the bar and the used value:
+
+| Range | Color |
+|-------|-------|
+| < 70 % | Green |
+| 70 – 90 % | Yellow |
+| ≥ 90 % | Red |
+
+### Swap panel
+
+The second panel shows swap in the same format. If no swap is configured, the panel shows `no swap configured` and an empty bar. Swap color thresholds are tighter — even moderate swap usage can indicate memory pressure:
+
+| Range | Color |
+|-------|-------|
+| < 25 % | Green |
+| 25 – 75 % | Yellow |
+| ≥ 75 % | Red |
+
+### Top processes by RSS
+
+The lower section lists all processes sorted by resident set size (RSS) — the amount of physical RAM each process is actually using. Columns: PID, user, RSS, virtual memory (VIRT), and command name.
+
+This view is more useful for diagnosing memory pressure than a CPU-sorted list, because a process that is idle but holding 4 GiB of RSS is still contributing to pressure even if its CPU usage is 0 %.
+
+### Memory pressure heuristic
+
+The Insights engine watches sustained RAM usage and fires:
+
+- **WARN** when `used_bytes / total_bytes ≥ 0.85` sustained over multiple ticks
+- **CRIT** when the ratio reaches **0.95** or higher
+
+When either fires, the alert appears in the Insights strip on the Overview tab and in the full Insights tab with a suggestion to open Memory.
+
+### Data model
+
+```rust
+pub struct MemTick {
+    pub total_bytes: u64,       // total installed RAM
+    pub used_bytes: u64,        // currently used RAM
+    pub available_bytes: u64,   // available to userspace (not just free)
+    pub swap_total_bytes: u64,  // total swap space (0 if none configured)
+    pub swap_used_bytes: u64,   // currently used swap
+}
+```
+
+`available_bytes` is the kernel's estimate of memory that can be given to a new process without swapping — it includes reclaimable cache and is more useful than raw free bytes for capacity planning.
+
+### Replaces
+
+`free -h` · `vm_stat` · `htop` mem panel
+
+  </Tab>
+</Tabs>
+
+## Keyboard shortcuts (both tabs)
+
+| Key | Action |
+|-----|--------|
+| `2` | Jump to CPU tab |
+| `3` | Jump to Memory tab |
+| `Tab` / `Shift-Tab` | Cycle to next / previous tab |
+| `←` / `→` | Scrub session history backward / forward |
+| `p` | Pause live collection |
+
+<CardGroup cols={2}>
+  <Card title="Overview" icon="gauge" href="/tabs/overview">
+    KPI summary tiles and Insights strip for all subsystems.
+  </Card>
+  <Card title="Disks & Filesystems" icon="hard-drive" href="/tabs/disks-filesystems">
+    Aggregate IO rates and per-mount usage for all block devices.
+  </Card>
+</CardGroup>

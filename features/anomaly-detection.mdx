@@ -1,0 +1,135 @@
+---
+title: "Insights: Heuristic Anomaly Detection Engine"
+description: "How SysWatch's six pure-function heuristics detect swap thrash, runaway processes, disk pressure, and more — and surface them as plain-English insight cards."
+---
+
+SysWatch's Insights engine evaluates six heuristics on every tick and surfaces any findings as plain-English cards. There are no daemons, no background threads, no persistent state beyond the ring buffer that the rest of the app already maintains. Each heuristic is a pure function that reads `(History, &Snapshot)` and returns either an insight or nothing.
+
+## Design: pure functions, no side effects
+
+`insights::compute()` is called once per tick, immediately after the collector pushes a new snapshot. It runs all six heuristics in sequence, collects the results, sorts them by severity (critical first), and caps the output at six cards. The result replaces `App::insights` on the struct — the previous list is dropped.
+
+Because every heuristic is pure, they are trivially testable and trivially parallelisable. They never mutate history, never write to disk, and never block on IO.
+
+## Where insights appear
+
+Insights surface in three places simultaneously:
+
+1. **Tab bar badge** — The `[+]` label on the Insights tab shows a count of non-Info findings. It is visible from every tab so you always know whether something needs attention.
+2. **Overview strip** — The bottom strip of the Overview tab (`1`) renders a compact one-line summary of the highest-severity active insight.
+3. **Insights tab** — The full Insights tab (`+`) displays each finding as a card with a title, a body with supporting detail, and a suggested tab to investigate further.
+
+## Severity levels
+
+Each insight carries one of three severity levels:
+
+| Level | Shown in badge | Shown in Overview strip | Card color |
+|---|---|---|---|
+| `INFO` | No | No | — |
+| `WARN` | Yes | Yes | Amber |
+| `CRIT` | Yes | Yes | Red |
+
+`INFO` is defined in the type system but intentionally not surfaced in the badge or strip — it is reserved for future informational hints that should not demand attention.
+
+## The six heuristics
+
+<AccordionGroup>
+  <Accordion title="Swap thrash">
+    **What it detects:** Swap space growing meaningfully over a rolling 30-tick (30-second) window, indicating that the system is actively paging out memory.
+
+    **Prerequisites:** At least 8 samples must have been collected, and current swap usage must be at least 64 MiB. Below that floor the heuristic returns nothing — small swap amounts are not worth signalling.
+
+    **Thresholds:**
+    - `WARN` — swap grew by ≥ 100 MiB over the 30-tick window
+    - `CRIT` — swap grew by ≥ 512 MiB over the 30-tick window
+
+    **Card body:** Current swap used versus total configured swap, and the name of the process holding the largest resident set at the time of detection.
+
+    **Suggested tab:** Memory
+  </Accordion>
+
+  <Accordion title="Runaway process">
+    **What it detects:** A single process whose CPU consumption has been *sustained* high, as opposed to a brief transient spike.
+
+    **How EWMA smoothing works:** Each tick, every live process gets a per-pid exponentially weighted moving average (EWMA) updated with alpha = 0.3:
+
+    ```
+    ewma_new = 0.7 × ewma_prev + 0.3 × cpu_pct_now
+    ```
+
+    With alpha = 0.3, a process needs roughly 5 consecutive ticks at elevated CPU before its EWMA climbs above the warn threshold. A single frame at 100% raises the EWMA by about 30 percentage points from zero — a process that was idle will reach only ~30% after one spike, well below the 50% warn line. Processes that disappear between ticks are pruned from the EWMA map entirely.
+
+    **Thresholds (applied to the smoothed EWMA, not the raw instantaneous value):**
+    - `WARN` — EWMA ≥ 50%
+    - `CRIT` — EWMA ≥ 90%
+
+    **Card body:** Instantaneous CPU %, RSS, process state, user, and parent PID.
+
+    **Suggested tab:** Procs
+  </Accordion>
+
+  <Accordion title="Disk full">
+    **What it detects:** The most-full mounted filesystem approaching or exceeding capacity.
+
+    Only mounts with a non-zero total size are considered. The heuristic finds the single worst mount by `usage_pct` and checks it against the thresholds.
+
+    **Thresholds:**
+    - `WARN` — most-full mount is ≥ 85% used
+    - `CRIT` — most-full mount is ≥ 95% used
+
+    **Card body:** Free bytes remaining, filesystem type, and a count of how many other mounts are also above 85% utilisation (if any).
+
+    **Suggested tab:** Filesystems (FS)
+  </Accordion>
+
+  <Accordion title="Memory pressure">
+    **What it detects:** RAM utilisation that has been sustained high over the last several ticks, which typically precedes swap activity or OOM kills.
+
+    The heuristic takes the last 6 samples from the `mem` ring (the used/total ratio) and computes a simple rolling average. At least 3 samples must be available before the heuristic fires.
+
+    **Thresholds (applied to the 6-sample rolling average, not the instantaneous reading):**
+    - `WARN` — average ≥ 85%
+    - `CRIT` — average ≥ 95%
+
+    **Card body:** Used bytes, total bytes, available bytes, and a note that sustained high pressure typically precedes swap activity or OOM kills.
+
+    **Suggested tab:** Memory
+  </Accordion>
+
+  <Accordion title="High load average">
+    **What it detects:** The 1-minute load average meaningfully exceeding the number of logical CPU cores, indicating a growing run-queue backlog.
+
+    **Thresholds (expressed as a multiple of core count):**
+    - Below 1.5× cores — no signal
+    - 1.5× – 2× cores — computed as `INFO`, suppressed (not returned)
+    - `WARN` — load_1 ≥ 2× cores
+    - `CRIT` — load_1 ≥ 4× cores
+
+    **Card body:** The full load triple (1m / 5m / 15m) and a note that sustained load above 2× cores indicates a queue forming on the run queue.
+
+    **Suggested tab:** CPU
+  </Accordion>
+
+  <Accordion title="Zombie party">
+    **What it detects:** An accumulation of zombie processes (state `Z`), which indicates a parent process is not calling `wait()` to reap its children. Zombies consume no CPU or memory, but their presence signals a bug in the parent.
+
+    **Thresholds:**
+    - Below 5 zombies — no signal
+    - `WARN` — 5–24 zombie processes
+    - `CRIT` — 25 or more zombie processes
+
+    **Card body:** Up to 5 of the most common parent PIDs and a note to restart the parent or send `SIGCHLD`.
+
+    **Suggested tab:** Procs
+  </Accordion>
+</AccordionGroup>
+
+## Ordering and the 6-card cap
+
+After all heuristics run, `compute()` sorts the results by severity descending — `CRIT` cards always appear before `WARN` cards — and then truncates the list to a maximum of 6 entries. If more than 6 conditions are active simultaneously, the least severe are dropped from the display. The underlying data is not affected; the next tick re-evaluates everything from scratch.
+
+This cap is intentional: a wall of dozens of cards is less useful than a ranked, actionable short list. If you see 6 cards all at `CRIT`, focus on the Memory and Procs tabs first — those conditions most frequently cascade.
+
+<Tip>
+  Each insight card carries a `suggested_tab` field. Pressing the corresponding key shortcut while the Insights tab is open takes you directly to the most relevant view. You can also scrub backward with `←` on the Timeline tab to see exactly when the condition first appeared.
+</Tip>

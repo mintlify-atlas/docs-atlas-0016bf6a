@@ -1,0 +1,139 @@
+---
+title: "GPU & Power tabs — hardware metrics in SysWatch"
+description: "Key 7 shows per-GPU utilization, VRAM, and power draw. Key 8 covers battery charge, thermal throttle, thermal zones, and fan speeds on macOS and Linux."
+---
+
+The GPU tab (key `7`) and Power tab (key `8`) surface hardware-level data that normally requires multiple specialized commands. Both tabs are honest about platform limits: when a metric requires elevated privileges, the tab shows what is available without `sudo` and explains what is missing and why — nothing is faked, and nothing prompts for a password.
+
+<Note>
+Fields that require `sudo powermetrics` on macOS (temperature, per-rail power, fans, GPU temp) display `—` and a one-line `live_data_hint` explaining the gap. The hint text comes directly from the collector and is shown verbatim in the tab.
+</Note>
+
+<Tabs>
+  <Tab title="GPU (key 7)">
+
+## What the tab shows
+
+Each detected GPU gets its own card. The card is split into two columns:
+
+**Left — metrics**
+- Utilization bar (`util_pct`, 0–100%)
+- VRAM gauge: used bytes / total bytes (`vram_used_bytes` / `vram_total_bytes`)
+
+**Right — status**
+- Vendor (`vendor`)
+- Driver / Metal family (`driver`)
+- Temperature (`temp_c`, color-coded: green < 70°C, yellow 70–79°C, red ≥ 80°C)
+- Power draw (`power_w`)
+- `live_data_hint` — printed when any live metric is unavailable
+
+If no GPUs are detected, the tab shows the discovery probes it attempted.
+
+## Data sources by platform
+
+### macOS (Apple Silicon and Intel)
+
+GPU identity is discovered at startup via `system_profiler SPDisplaysDataType -json` — no `sudo` required. Per-tick live data comes from `ioreg -r -d 1 -w 0 -c IOAccelerator`, which reads `PerformanceStatistics` from each `IOAccelerator` entry:
+
+| `PerformanceStatistics` key | Mapped field |
+|-----------------------------|-------------|
+| `Device Utilization %` | `util_pct` |
+| `In use system memory` | `vram_used_bytes` |
+
+VRAM total is parsed from `system_profiler`'s `spdisplays_vram_shared` or `spdisplays_vram` field. The driver field is taken from `spdisplays_metalfamily` (the Metal GPU family string).
+
+Temperature and per-rail power still require `sudo powermetrics --samplers gpu_power`, which is deferred to v0.2. When those fields are unavailable, `live_data_hint` reads:
+
+> `temperature + per-rail power need sudo powermetrics --samplers gpu_power (deferred)`
+
+### Linux
+
+GPU discovery scans `/sys/class/drm/card*/device/` and reads `vendor` and `device` PCI IDs to determine vendor (NVIDIA `0x10de`, AMD `0x1002`, Intel `0x8086`). Per-tick utilization is read from `/sys/class/drm/card<N>/device/gpu_busy_percent` when the driver exposes it (AMDGPU, recent i915). When the file is absent, `live_data_hint` reads:
+
+> `driver doesn't expose gpu_busy_percent; install nvml or amdgpu-tools`
+
+### NVIDIA (optional)
+
+NVIDIA live stats require the `gpu-nvidia` Cargo feature, which wraps `nvml-wrapper`. Build with:
+
+```bash
+cargo build --release --features gpu-nvidia
+```
+
+This feature is deferred for general availability and currently listed as future work.
+
+## Replaces
+
+`ioreg -r -d 1 -w 0 -c IOAccelerator` (macOS), `/sys/class/drm` inspection (Linux)
+
+  </Tab>
+  <Tab title="Power (key 8)">
+
+## What the tab shows
+
+The Power tab is split into three sections stacked vertically:
+
+### Battery section
+
+Displays a charge bar and state label (charging, discharging at current amperage, or fully charged) on the left, and the following stats on the right:
+
+| Field | Source |
+|-------|--------|
+| Time remaining / to full (`time_remaining_min`) | Minutes; shown as `H:MM` |
+| Cycle count (`cycle_count`) | Charge cycles since manufacture |
+| Health (`health_pct`) | Current full capacity ÷ design capacity × 100 |
+| Temperature (`temp_c`) | Color-coded: green < 35°C, yellow 35–39°C, red ≥ 40°C |
+| Voltage (`voltage_v`) | Volts |
+
+When no battery is present (desktop or VM) the section shows a placeholder message.
+
+### Power status section
+
+Three columns side by side:
+
+- **Source** — AC or Battery (`source` field)
+- **Thermal** — CPU speed limit as a percentage of nominal (`thermal_throttle_pct`). `100%` = no throttle; values below 100 indicate active thermal throttling
+- **Draw** — System power in watts (`system_power_w`). Color-coded: green < 15 W, yellow 15–29 W, red ≥ 30 W
+
+### Thermal zones and fans section
+
+Two columns side by side:
+
+- **Thermal zones** — each zone shows its name, temperature, and a proportional bar (green < 60°C, yellow 60–79°C, red ≥ 80°C)
+- **Fans** — name, RPM, and target RPM when available
+
+## Data sources by platform
+
+### macOS
+
+| Data | Command | Requires sudo |
+|------|---------|--------------|
+| Battery (charge, cycles, health, temp, voltage, amperage) | `ioreg -rn AppleSmartBattery` | No |
+| Power source (AC vs Battery) | `pmset -g batt` | No |
+| Thermal throttle (`CPU_Speed_Limit`) | `pmset -g therm` | No |
+| Fans, per-component power | `powermetrics --samplers thermal,smc` | **Yes** |
+
+System power draw (`system_power_w`) is derived from the battery's own voltage × amperage reading — no `sudo` required. When fans are unavailable, `live_data_hint` reads:
+
+> `fans + per-component power need sudo powermetrics --samplers thermal,smc (deferred)`
+
+Thermal zones on macOS require the IOReport private API and are not collected in v0.1.
+
+### Linux
+
+| Data | Source | Requires sudo |
+|------|--------|--------------|
+| Battery (charge, status, cycles, voltage, current, health) | `/sys/class/power_supply/BAT*/*` | No |
+| Power source | `/sys/class/power_supply/*/type` | No |
+| System power draw | `power_now` (µW), or `voltage_now × current_now` as fallback | No |
+| Thermal zones | `/sys/class/thermal/thermal_zone*/temp` | No |
+| Fans | `/sys/class/hwmon/hwmon*/fan*_input` | No |
+
+Thermal throttling on Linux is not collected in v0.1 (shown as `—`); it requires a `cpufreq` collector that is deferred.
+
+## Replaces
+
+`pmset`, `ioreg -rn AppleSmartBattery` (macOS), `/sys/class/power_supply` inspection (Linux)
+
+  </Tab>
+</Tabs>

@@ -1,0 +1,130 @@
+---
+title: "SysWatch Architecture Overview: Modules & Data Flow"
+description: "A guide to SysWatch's module structure, single-threaded refresh model, and the data pipeline from Collector::sample() through History to the TUI renderer."
+---
+
+SysWatch is organized around a strict separation between collection, storage, analysis, and rendering. Each layer has a single job: `collect/` gathers raw numbers, `app.rs` manages state and the event loop, `insights/` runs heuristics, and `tabs/` draws what the user sees. Nothing crosses those boundaries in the other direction.
+
+## Module structure
+
+```text
+src/
+├── main.rs              CLI + entry
+├── app.rs               Event loop, tab state, scrub plumbing
+├── collect/             One Collector per subsystem; Snapshot the wire format
+│   ├── collector.rs     sysinfo-backed CPU/Mem/Procs + dispatch
+│   ├── gpu.rs           system_profiler / sysfs DRM
+│   ├── power.rs         ioreg / pmset / sysfs power_supply
+│   ├── services.rs      launchctl / systemctl
+│   └── ring.rs          Bounded history + nth_back for scrubbing
+├── insights/            Pure functions over (History, &Snapshot)
+├── tabs/                One file per tab; thin renderers over the model
+└── ui/
+    ├── chrome.rs        Header, tab bar, footer
+    ├── palette.rs       Single source of color truth
+    └── widgets.rs       block_bar, sparkline, panel
+```
+
+## Role of each module
+
+### `main.rs`
+
+Parses CLI arguments with `clap` and calls `app::run()`. The only job here is to translate command-line flags (`--tick`, `--tab`) into an `Options` struct and hand control to the event loop.
+
+### `app.rs`
+
+Owns the top-level `App` struct, the `History` ring set, and the `run()` event loop. It also defines `TabId`, `ProcSort`, `ServiceSort`, and `LiveState`. Every piece of mutable state that persists across ticks lives here. The scrub offset (`scrub_offset`) is tracked in `App` so every tab automatically shows historical data when the user rewinds via the Timeline.
+
+### `collect/`
+
+Houses one `Collector` per subsystem plus the shared `Snapshot` struct that acts as the wire format between collection and rendering. `Collector::sample()` returns a fully populated `Snapshot` on every call; callers never reach into the collector's internal state directly.
+
+- **`collector.rs`** — The primary collector. Wraps long-lived `sysinfo` handles (`System`, `Disks`, `Networks`, `Users`) and maintains previous-tick counters so it can compute per-second rates for network, disk IO, and per-process IO. Delegates to `GpuDiscovery`, `PowerCollector`, and `ServicesCollector`.
+- **`gpu.rs`** — macOS: calls `system_profiler SPDisplaysDataType -json` once at startup for static identity, then calls `ioreg -r -d 1 -w 0 -c IOAccelerator` each tick to refresh live utilization and used VRAM from `PerformanceStatistics`. Linux: scans `/sys/class/drm/card*/device/` for PCI vendor/device IDs and reads `gpu_busy_percent` per tick for AMDGPU and recent i915 drivers.
+- **`power.rs`** — macOS: calls `ioreg -rn AppleSmartBattery` for battery charge, cycle count, health, temperature, voltage, and amperage; `pmset -g batt` for power source; `pmset -g therm` for thermal throttle percentage. Linux: reads `/sys/class/power_supply/BAT*`, `/sys/class/thermal/thermal_zone*`, and `/sys/class/hwmon/hwmon*/fan*_input`, all without sudo.
+- **`services.rs`** — macOS: runs `launchctl list` and parses the PID / Status / Label tab-delimited output. Linux: runs `systemctl list-units --type=service --all --no-legend --plain --no-pager` and parses UNIT / LOAD / ACTIVE / SUB / DESCRIPTION columns.
+- **`ring.rs`** — A bounded `VecDeque`-backed circular buffer. When capacity is reached, the oldest element is dropped. `nth_back(n)` returns the element `n` positions behind the most recent, which is what the scrubber uses to rewind every panel simultaneously.
+
+### `insights/`
+
+Pure functions only. `insights::compute(history, snapshot)` runs six heuristics — swap thrash, runaway process, disk full, memory pressure, high load average, and zombie accumulation — and returns a sorted, capped list of `Insight` values. No side effects, no I/O, no mutation. Results are re-computed each tick and stored in `App::insights`.
+
+### `tabs/`
+
+One file per tab. Each renderer receives a shared reference to `App` and the `Snapshot` returned by `App::displayed_snap()` (which is either the live snapshot or a historical one depending on `scrub_offset`). Tabs are thin: they read from the model and call `ui/widgets` helpers; they hold no state of their own.
+
+### `ui/`
+
+- **`chrome.rs`** — Three fixed-height regions: a one-row header (hostname, OS, uptime, load averages, live/pause/scrub indicator, timestamp), a two-row tab bar (labels on row 0, a Unicode box-drawing underline on row 1 with corner glyphs marking the active tab), and a two-row footer (separator line, hotkey strip).
+- **`palette.rs`** — The single source of color truth. All colors used throughout the application are defined here as `ratatui::style::Color::Rgb` constants (`BG`, `FG`, `DIM`, `FAINT`, `CYAN`, `GREEN`, `YELLOW`, `RED`, `MAGENTA`, and semantic variants for selection and alert backgrounds). No other file defines colors directly.
+- **`widgets.rs`** — Shared rendering primitives: `block_bar` (proportional fill bars), `sparkline` (Unicode block-character history graphs), `panel` (titled bordered box), and `human_bytes` (byte-count formatter used by both tabs and insights).
+
+## Data flow
+
+Each tick through the event loop follows this pipeline:
+
+```
+Collector::sample()
+  └─► Snapshot          (wire format: all subsystems in one struct)
+        └─► History::push()
+              ├─► scalar rings (cpu, mem, swap, net_rate, io_rate)
+              ├─► proc_cpu_ewma (per-pid EWMA, alpha=0.3)
+              └─► session ring (full Snapshot, capacity 120)
+                    └─► insights::compute(history, snapshot)
+                          └─► App::insights (Vec<Insight>)
+                                └─► tabs::draw(frame, body, app, snap)
+```
+
+The `Snapshot` struct is the contract between collection and rendering. Collectors write into it; everything else reads from it. It is cloned into the session ring on every tick so the scrubber can replay any point in the last two minutes of history.
+
+## Refresh model
+
+SysWatch uses two refresh cadences managed inside the event loop in `app.rs`:
+
+**Fast loop (default 1 Hz, configurable via `--tick <ms>`):**
+CPU usage, memory, processes, network interfaces, and disk IO are sampled on every tick. These metrics are cheap to read: sysinfo refreshes in-process kernel counters, and netwatch-sdk reads `/proc/diskstats` or `getifaddrs` without spawning subprocesses.
+
+**Slow loop (5 seconds):**
+Power (battery, thermal, fans) and Services (launchctl / systemctl) are gated behind a 5-second cache inside `PowerCollector` and `ServicesCollector`. Both collectors spawn subprocesses — on macOS, `ioreg`, `pmset`, and `launchctl` are expensive enough that calling them at 1 Hz would push CPU usage well above the 0.5% idle budget. The cached `PowerTick` and `Vec<ServiceTick>` are returned unchanged on ticks where the cache has not expired.
+
+## Event loop
+
+The event loop in `app::run()` follows this sequence on every iteration:
+
+```
+1. draw        → render current App state to the terminal
+2. poll        → block up to (tick_period − elapsed) for a terminal event
+3. key event   → update App (tab switch, scroll, scrub, pause, quit)
+4. tick check  → if tick_period has elapsed and not paused:
+                    sample()    Collector::sample() → Snapshot
+                    push()      History::push(&snap)
+                    compute()   insights::compute(&history, &snap)
+                    store snap  App::snap = Some(snap)
+```
+
+The minimum poll timeout is clamped to 33 ms so the UI stays responsive to keystrokes even when the tick rate is slow. A resize event triggers the next draw without otherwise changing state.
+
+## Key design decisions
+
+**Single-threaded.** `Collector` is not `Send`; the sysinfo handles it wraps are not `Sync`. The event loop, sampling, and rendering all run on one thread. This avoids locking overhead and keeps the architecture simple enough to reason about without a concurrency model.
+
+**Read-only by design.** SysWatch never mutates system state. No kill, renice, unmount, or restart. This is an explicit anti-goal: every API surface the collectors touch is observational.
+
+**netwatch-sdk for shared parsers.** Aggregate disk IO (Linux `/proc/diskstats`) and network interface counters (Linux sysfs, macOS `getifaddrs`) are read through `netwatch-sdk` so SysWatch and the NetWatch agent parse those sources identically. Per-process IO falls back to sysinfo where the SDK has no equivalent.
+
+**Optional features behind cargo flags.** NVIDIA live GPU statistics (`nvml-wrapper`) and SMART disk health (`smartctl --json`) are compiled out by default. Enable them with `--features gpu-nvidia` or `--features smart` at build time.
+
+<CardGroup cols={2}>
+  <Card title="Data Model" icon="database" href="/architecture/data-model">
+    Full field-by-field reference for Snapshot and every struct it contains.
+  </Card>
+  <Card title="Session Scrubbing" icon="clock-rotate-left" href="/features/session-scrubbing">
+    How the Ring buffer and scrub_offset work together to rewind every panel.
+  </Card>
+  <Card title="Anomaly Detection" icon="triangle-exclamation" href="/features/anomaly-detection">
+    The six heuristics in insights::compute() and their severity thresholds.
+  </Card>
+  <Card title="Optional Features" icon="puzzle-piece" href="/configuration/optional-features">
+    Enabling NVIDIA GPU stats and SMART disk health at compile time.
+  </Card>
+</CardGroup>

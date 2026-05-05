@@ -1,0 +1,91 @@
+---
+title: 'Timeline Scrubber: Rewind Your Session History'
+description: 'SysWatch keeps a 2-minute rolling ring buffer of every snapshot. Scrub backward through time with arrow keys and inspect every tab at any historical moment.'
+---
+
+SysWatch continuously records every system snapshot into a bounded ring buffer. When something looks wrong — a CPU spike, a memory surge, a network burst — you can rewind the entire app to the moment it happened and inspect every tab as if you were there.
+
+## How the ring buffer works
+
+Every tick (default: once per second), SysWatch calls its collector and pushes the resulting `Snapshot` into the session ring. The ring has a capacity of **120 entries**, which at 1 Hz equals exactly **two minutes of history**. When the ring is full, the oldest sample is silently dropped from the front — the newest sample is always written at the back.
+
+The `History` struct maintains one ring per signal type, all at the same capacity so scrubbing stays in sync:
+
+| Ring | Type | What it holds |
+|---|---|---|
+| `session` | `Ring<Snapshot>` | Full per-tick snapshots for scrubbing |
+| `cpu` | `Ring<f32>` | Aggregate CPU usage % for sparklines |
+| `mem` | `Ring<f32>` | Memory used / total ratio |
+| `swap` | `Ring<u64>` | Swap used in bytes |
+| `net_rate` | `Ring<f64>` | Net rx+tx bytes/sec |
+| `io_rate` | `Ring<f64>` | Disk rd+wr bytes/sec |
+
+The session ring is what makes scrubbing possible. Every other ring feeds sparklines and heuristics. They all share the same capacity, so index `N` in every ring corresponds to the same tick.
+
+## What "scrubbing" means
+
+`scrub_offset` is an integer stored on the `App` state. When it is `0`, the app is live — `displayed_snap()` returns the latest collected snapshot. When it is greater than zero, `displayed_snap()` calls `session.nth_back(scrub_offset)`, which counts back from the most recent entry.
+
+**Every tab calls `displayed_snap()`.** The CPU tab, Memory tab, Procs tab, Disk tab — none of them hold their own copy of the data. They all render whatever `displayed_snap()` returns. Scrubbing one tick backward moves every panel to that historical moment simultaneously, with no extra work per tab.
+
+## The live state indicator
+
+The header bar always shows one of three states:
+
+| Label | Meaning |
+|---|---|
+| `LIVE` | `scrub_offset == 0` and not paused — data is current |
+| `PAUSED` | Collection halted with `p`; offset is still 0 |
+| `SCRUB` | `scrub_offset > 0` — you are viewing a historical snapshot |
+
+The indicator is derived from `App::live_state()` on every render, so it updates the instant you move the offset.
+
+## Navigating to a past event
+
+<Steps>
+  <Step title="Notice an anomaly in the current view">
+    An Insights card fires, a sparkline spikes, or you catch something in the Overview strip. The anomaly may already be receding — the live data is moving on.
+  </Step>
+  <Step title="Press `-` to open the Timeline tab">
+    The Timeline tab (`-`) shows the full session ring as a scrollable chart. It gives you a visual reference for where peaks and valleys occurred across the two-minute window.
+  </Step>
+  <Step title="Press `←` to scrub backward">
+    Each press of `←` increments `scrub_offset` by one tick, moving the displayed snapshot one second further into the past. The header indicator switches to `SCRUB`. The Timeline highlights the position you are viewing.
+  </Step>
+  <Step title="Press `→` to move forward again">
+    `→` decrements the offset. When the offset reaches `0` you are back at the live snapshot and the indicator returns to `LIVE`. You can step forward and backward as many times as you need.
+  </Step>
+  <Step title="Press `Home` or `End` to jump to the extremes">
+    `Home` jumps directly to the oldest available sample (offset = ring length − 1). `End` jumps back to live (offset = 0). These are useful when you want to compare the very beginning of the window against the current state.
+  </Step>
+  <Step title="Switch tabs while still scrubbed">
+    Press `1`–`+` to navigate to any tab — CPU, Memory, Procs, Disks, or any other — while `scrub_offset` is still non-zero. Every panel renders the historical snapshot. You can check which process was misbehaving, how much memory was in use, and what disk IO looked like, all at the same captured moment.
+  </Step>
+  <Step title="Press `End` or `→` to return to live">
+    Once you have finished investigating, press `End` (or tap `→` until the offset is zero) to return to the live feed. Collection never stopped — history continued accumulating while you were scrubbing.
+  </Step>
+</Steps>
+
+<Note>
+  Pausing (`p`) freezes collection but does not change `scrub_offset`. If you pause and then press `←`, you will scrub into the history that was collected before the pause. Pressing `End` restores live view and resumes from wherever collection paused.
+</Note>
+
+## Scrub controls at a glance
+
+```text
+←        Move one tick further into the past
+→        Move one tick toward the present
+Home     Jump to the oldest available sample
+End      Return to live (scrub_offset = 0)
+```
+
+These bindings are active on **every tab**, not only Timeline. You do not need to switch to Timeline to start scrubbing.
+
+## Planned additions in v0.2
+
+The session ring is the foundation that future features will build on:
+
+- **Snapshot+Diff** — show a side-by-side diff between two scrub positions, bound to the `S`/`D` footer keys.
+- **Recording/Replay** — write the session ring to disk and replay it offline, bound to `R`.
+
+Neither feature requires changes to the ring buffer itself; the data model is already in place.

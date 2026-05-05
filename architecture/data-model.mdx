@@ -1,0 +1,674 @@
+---
+title: "SysWatch Data Model: Snapshot Struct Field Reference"
+description: "Field-by-field reference for the Snapshot wire format and every struct it contains — CpuTick, MemTick, ProcTick, GpuTick, PowerTick, Ring, and History."
+---
+
+Every piece of data that flows from the collector to the renderer passes through a single `Snapshot` value. It is produced by `Collector::sample()` once per tick, cloned into `History::session`, and read — never mutated — by `insights::compute()` and every tab renderer. Understanding its shape is sufficient to understand what any tab can display.
+
+## Snapshot
+
+The top-level wire format. One instance is produced per tick and stored as `App::snap`. Historical instances are kept in `History::session` for scrubbing.
+
+```rust
+pub struct Snapshot {
+    pub t: SystemTime,
+    pub host: HostInfo,
+    pub cpu: CpuTick,
+    pub mem: MemTick,
+    pub disks: Vec<DiskUsageTick>,
+    pub disk_io: DiskIoTick,
+    pub net: Vec<InterfaceTick>,
+    pub procs: Vec<ProcTick>,
+    pub gpus: Vec<GpuTick>,
+    pub power: PowerTick,
+    pub services: Vec<ServiceTick>,
+}
+```
+
+<ResponseField name="t" type="SystemTime" required>
+  Wall-clock timestamp at the moment `Collector::sample()` was called. Used by the Timeline tab and the header's `HH:MM:SS` display.
+</ResponseField>
+
+<ResponseField name="host" type="HostInfo" required>
+  Static host identity plus uptime. `uptime_secs` is refreshed every tick; the other fields are populated once at startup.
+</ResponseField>
+
+<ResponseField name="cpu" type="CpuTick" required>
+  Aggregate CPU usage percentage, per-core breakdown, and the three load averages for the current tick.
+</ResponseField>
+
+<ResponseField name="mem" type="MemTick" required>
+  Physical memory and swap totals, used, and available counts in bytes.
+</ResponseField>
+
+<ResponseField name="disks" type="Vec<DiskUsageTick>" required>
+  One entry per mounted filesystem. Ordered as the OS enumerates them; the FS tab sorts independently for display.
+</ResponseField>
+
+<ResponseField name="disk_io" type="DiskIoTick" required>
+  Aggregate read and write throughput across all block devices for this tick, derived from `/proc/diskstats` on Linux or per-process IO sums on macOS.
+</ResponseField>
+
+<ResponseField name="net" type="Vec<InterfaceTick>" required>
+  One entry per network interface, sorted by name. Rates are per-second deltas against the previous tick's counters.
+</ResponseField>
+
+<ResponseField name="procs" type="Vec<ProcTick>" required>
+  All running processes visible to the current user, sorted by CPU usage descending at collection time. The Procs tab re-sorts for display based on `App::proc_sort`.
+</ResponseField>
+
+<ResponseField name="gpus" type="Vec<GpuTick>" required>
+  One entry per GPU detected at startup. Static fields (name, vendor, VRAM total) are populated once; live fields (util, used VRAM) are refreshed each tick where the platform allows it without sudo.
+</ResponseField>
+
+<ResponseField name="power" type="PowerTick" required>
+  Power source, battery state, thermal throttle percentage, thermal zones, fans, and system-wide power draw. Refreshed at most every 5 seconds due to subprocess cost.
+</ResponseField>
+
+<ResponseField name="services" type="Vec<ServiceTick>" required>
+  Services enumerated by `launchctl list` (macOS) or `systemctl list-units` (Linux), sorted by name. Refreshed at most every 5 seconds.
+</ResponseField>
+
+---
+
+## HostInfo
+
+Static identity for the machine, populated once at collector startup. `uptime_secs` is the only field updated each tick.
+
+```rust
+pub struct HostInfo {
+    pub hostname: String,
+    pub os: String,
+    pub uptime_secs: u64,
+    pub cpu_model: String,
+    pub cpu_cores: u32,
+}
+```
+
+<ResponseField name="hostname" type="String" required>
+  System hostname as returned by `System::host_name()`. Falls back to `"localhost"` if unavailable.
+</ResponseField>
+
+<ResponseField name="os" type="String" required>
+  Human-readable OS string in the form `"<name> <version> <arch>"`, e.g. `"macOS 14.4 aarch64"`. Composed from `System::name()`, `System::os_version()`, and `std::env::consts::ARCH`.
+</ResponseField>
+
+<ResponseField name="uptime_secs" type="u64" required>
+  System uptime in seconds since last boot, from `System::uptime()`. Refreshed on every tick.
+</ResponseField>
+
+<ResponseField name="cpu_model" type="String" required>
+  CPU brand string from the first logical core reported by sysinfo, e.g. `"Apple M3 Pro"` or `"Intel(R) Core(TM) i9-13900K"`.
+</ResponseField>
+
+<ResponseField name="cpu_cores" type="u32" required>
+  Total number of logical CPU cores as reported by `sys.cpus().len()`. This is the denominator for load saturation calculations in the Insights engine.
+</ResponseField>
+
+---
+
+## CpuTick
+
+One sample of CPU activity. `usage_pct` is the average of all per-core values.
+
+```rust
+pub struct CpuTick {
+    pub load_1: f32,
+    pub load_5: f32,
+    pub load_15: f32,
+    pub usage_pct: f32,
+    pub per_core: Vec<f32>,
+}
+```
+
+<ResponseField name="load_1" type="f32" required>
+  1-minute load average from `System::load_average()`. Comparable to the first column of `uptime` output.
+</ResponseField>
+
+<ResponseField name="load_5" type="f32" required>
+  5-minute load average.
+</ResponseField>
+
+<ResponseField name="load_15" type="f32" required>
+  15-minute load average.
+</ResponseField>
+
+<ResponseField name="usage_pct" type="f32" required>
+  Aggregate CPU usage percentage (0–100), computed as the mean of all `per_core` values. This is the value pushed into `History::cpu` each tick.
+</ResponseField>
+
+<ResponseField name="per_core" type="Vec<f32>" required>
+  Per-logical-core usage percentages (0–100 each), one element per core in the order sysinfo enumerates them. The CPU tab renders these as individual sparklines.
+</ResponseField>
+
+---
+
+## MemTick
+
+Physical memory and swap in bytes, from sysinfo's `System` counters.
+
+```rust
+pub struct MemTick {
+    pub total_bytes: u64,
+    pub used_bytes: u64,
+    pub available_bytes: u64,
+    pub swap_total_bytes: u64,
+    pub swap_used_bytes: u64,
+}
+```
+
+<ResponseField name="total_bytes" type="u64" required>
+  Total installed physical RAM in bytes.
+</ResponseField>
+
+<ResponseField name="used_bytes" type="u64" required>
+  Bytes of physical RAM currently in use. The Memory tab bar is `used_bytes / total_bytes`.
+</ResponseField>
+
+<ResponseField name="available_bytes" type="u64" required>
+  Bytes of physical RAM available without swapping. On Linux this includes reclaimable page cache.
+</ResponseField>
+
+<ResponseField name="swap_total_bytes" type="u64" required>
+  Total configured swap space in bytes.
+</ResponseField>
+
+<ResponseField name="swap_used_bytes" type="u64" required>
+  Bytes of swap currently in use. Pushed into `History::swap` each tick; the swap-thrash heuristic compares this against the value 30 ticks ago.
+</ResponseField>
+
+---
+
+## DiskUsageTick
+
+Capacity and usage for one mounted filesystem. One instance per mount point.
+
+```rust
+pub struct DiskUsageTick {
+    pub mount_point: String,
+    pub device: String,
+    pub fs_type: String,
+    pub total_bytes: u64,
+    pub used_bytes: u64,
+    pub available_bytes: u64,
+    pub usage_pct: f32,
+}
+```
+
+<ResponseField name="mount_point" type="String" required>
+  Mount point path, e.g. `"/"` or `"/home"`. Used as the display label in the FS tab and as the identifier in disk-full insight messages.
+</ResponseField>
+
+<ResponseField name="device" type="String" required>
+  Block device name, e.g. `"disk1s1"` on macOS or `"nvme0n1p2"` on Linux.
+</ResponseField>
+
+<ResponseField name="fs_type" type="String" required>
+  Filesystem type string, e.g. `"apfs"`, `"ext4"`, `"tmpfs"`.
+</ResponseField>
+
+<ResponseField name="total_bytes" type="u64" required>
+  Total capacity of the filesystem in bytes.
+</ResponseField>
+
+<ResponseField name="used_bytes" type="u64" required>
+  Bytes used, computed as `total_bytes − available_bytes`.
+</ResponseField>
+
+<ResponseField name="available_bytes" type="u64" required>
+  Bytes available for new data as reported by the OS (accounts for reserved blocks on ext4).
+</ResponseField>
+
+<ResponseField name="usage_pct" type="f32" required>
+  `used_bytes / total_bytes × 100`. The disk-full heuristic fires at ≥85% (warn) and ≥95% (crit).
+</ResponseField>
+
+---
+
+## DiskIoTick
+
+Aggregate block-device IO for the current tick interval, across all devices.
+
+```rust
+pub struct DiskIoTick {
+    pub read_bytes_total: u64,
+    pub write_bytes_total: u64,
+    pub read_rate: f64,
+    pub write_rate: f64,
+}
+```
+
+<ResponseField name="read_bytes_total" type="u64" required>
+  Cumulative bytes read from all block devices since boot. On Linux, sourced from `/proc/diskstats` via netwatch-sdk; on macOS, approximated by summing per-process `total_read_bytes` from sysinfo.
+</ResponseField>
+
+<ResponseField name="write_bytes_total" type="u64" required>
+  Cumulative bytes written to all block devices since boot.
+</ResponseField>
+
+<ResponseField name="read_rate" type="f64" required>
+  Read throughput in bytes per second for this tick, computed as `(read_bytes_total − previous_read_bytes_total) / dt`. Zero on the first tick.
+</ResponseField>
+
+<ResponseField name="write_rate" type="f64" required>
+  Write throughput in bytes per second for this tick. The sum `read_rate + write_rate` is pushed into `History::io_rate`.
+</ResponseField>
+
+---
+
+## InterfaceTick
+
+Counters and rates for one network interface. One instance per interface, sorted by name.
+
+```rust
+pub struct InterfaceTick {
+    pub name: String,
+    pub is_up: bool,
+    pub rx_bytes: u64,
+    pub tx_bytes: u64,
+    pub rx_rate: f64,
+    pub tx_rate: f64,
+}
+```
+
+<ResponseField name="name" type="String" required>
+  Interface name, e.g. `"en0"`, `"eth0"`, `"lo"`.
+</ResponseField>
+
+<ResponseField name="is_up" type="bool" required>
+  Whether the interface is currently up. Sourced from netwatch-sdk on Linux and macOS; always `true` for the sysinfo fallback path, which only enumerates active interfaces.
+</ResponseField>
+
+<ResponseField name="rx_bytes" type="u64" required>
+  Cumulative bytes received since the interface came up.
+</ResponseField>
+
+<ResponseField name="tx_bytes" type="u64" required>
+  Cumulative bytes transmitted since the interface came up.
+</ResponseField>
+
+<ResponseField name="rx_rate" type="f64" required>
+  Receive throughput in bytes per second for this tick. Zero on the first tick or if the previous counter was zero.
+</ResponseField>
+
+<ResponseField name="tx_rate" type="f64" required>
+  Transmit throughput in bytes per second for this tick. The aggregate `sum(rx_rate + tx_rate)` across all interfaces is pushed into `History::net_rate`.
+</ResponseField>
+
+---
+
+## ProcTick
+
+One process entry. The collector populates one `ProcTick` per entry in `sysinfo::System::processes()`.
+
+```rust
+pub struct ProcTick {
+    pub pid: u32,
+    pub ppid: u32,
+    pub user: String,
+    pub name: String,
+    pub cmd: String,
+    pub cpu_pct: f32,
+    pub mem_rss: u64,
+    pub mem_virt: u64,
+    pub threads: u32,
+    pub state: char,
+    pub start_time: Option<SystemTime>,
+    pub io_rate: f64,
+}
+```
+
+<ResponseField name="pid" type="u32" required>
+  Process ID.
+</ResponseField>
+
+<ResponseField name="ppid" type="u32" required>
+  Parent process ID. `0` if sysinfo reports no parent.
+</ResponseField>
+
+<ResponseField name="user" type="String" required>
+  Username owning the process, resolved via `sysinfo::Users`. Falls back to `"?"` if the UID cannot be resolved.
+</ResponseField>
+
+<ResponseField name="name" type="String" required>
+  Short process name (the executable basename), e.g. `"rustc"` or `"kernel_task"`.
+</ResponseField>
+
+<ResponseField name="cmd" type="String" required>
+  Full command line with arguments joined by spaces, e.g. `"cargo build --release"`.
+</ResponseField>
+
+<ResponseField name="cpu_pct" type="f32" required>
+  CPU usage percentage (0–100) for this tick as reported by sysinfo. On multi-core systems this can exceed 100% (it is not normalized by core count). Used directly by the Procs tab and fed into the per-pid EWMA in `History::proc_cpu_ewma`.
+</ResponseField>
+
+<ResponseField name="mem_rss" type="u64" required>
+  Resident set size in bytes — physical RAM currently mapped by this process. The runaway-process insight reports this in its body.
+</ResponseField>
+
+<ResponseField name="mem_virt" type="u64" required>
+  Virtual memory size in bytes.
+</ResponseField>
+
+<ResponseField name="threads" type="u32" required>
+  Thread count. Currently hardcoded to `1` because sysinfo does not expose per-process thread counts portably; reserved for a future platform-specific extension.
+</ResponseField>
+
+<ResponseField name="state" type="char" required>
+  Single-character process state code: `'R'` (running), `'S'` (sleeping), `'Z'` (zombie), `'D'` (uninterruptible wait), etc. Derived from `sysinfo::ProcessStatus::to_string()`. The zombie-party heuristic filters on `state == 'Z'`.
+</ResponseField>
+
+<ResponseField name="start_time" type="Option<SystemTime>">
+  Process start time as a `SystemTime`, derived from sysinfo's Unix epoch offset. `None` if unavailable.
+</ResponseField>
+
+<ResponseField name="io_rate" type="f64" required>
+  Bytes per second of disk IO (reads + writes combined) for this tick, computed against the previous tick's cumulative IO counter. `0.0` on first observation or when no IO occurred.
+</ResponseField>
+
+---
+
+## ServiceTick
+
+One service entry from `launchctl list` (macOS) or `systemctl list-units` (Linux).
+
+```rust
+pub struct ServiceTick {
+    pub name: String,
+    pub status: ServiceStatus,
+    pub pid: Option<u32>,
+    pub exit_code: Option<i32>,
+    pub detail: String,
+}
+```
+
+<ResponseField name="name" type="String" required>
+  Service label (macOS) or unit name (Linux), e.g. `"com.apple.bird"` or `"sshd.service"`.
+</ResponseField>
+
+<ResponseField name="status" type="ServiceStatus" required>
+  Normalized status enum with four variants:
+
+  - `Running` — has a live PID (macOS) or `active/running` (Linux)
+  - `Idle` — no PID but clean exit (macOS) or `active/exited` / `inactive` (Linux)
+  - `Failed` — no PID and non-zero exit code (macOS) or `failed` (Linux)
+  - `Unknown` — status information could not be determined
+</ResponseField>
+
+<ResponseField name="pid" type="Option<u32>">
+  Running process ID when the service is active. `None` for stopped or failed services. On Linux, systemctl output does not include PIDs in the list view, so this is always `None` for the Linux collector.
+</ResponseField>
+
+<ResponseField name="exit_code" type="Option<i32>">
+  Last exit code. On macOS: the `Status` column from `launchctl list` (negative values indicate a kill signal, e.g. `-9` for SIGKILL). On Linux: always `None` in the current implementation.
+</ResponseField>
+
+<ResponseField name="detail" type="String" required>
+  Free-form per-platform diagnostic string. macOS: `"killed by signal 9"`, `"exit code 1"`, or `"clean exit / never run"`. Linux: `"active / running — OpenSSH server daemon"` (ACTIVE / SUB — DESCRIPTION).
+</ResponseField>
+
+---
+
+## GpuTick
+
+Identity and live metrics for one GPU. Static fields are populated once at startup; live fields are refreshed each tick where the platform provides them without elevated privileges.
+
+```rust
+pub struct GpuTick {
+    pub name: String,
+    pub vendor: String,
+    pub driver: Option<String>,
+    pub vram_total_bytes: Option<u64>,
+    pub vram_used_bytes: Option<u64>,
+    pub util_pct: Option<f32>,
+    pub temp_c: Option<f32>,
+    pub power_w: Option<f32>,
+    pub live_data_hint: Option<String>,
+}
+```
+
+<ResponseField name="name" type="String" required>
+  GPU model name, e.g. `"Apple M3 Pro"` (from `system_profiler SPDisplaysDataType`) or `"AMD 0x687f"` (from Linux DRM sysfs PCI device ID).
+</ResponseField>
+
+<ResponseField name="vendor" type="String" required>
+  Vendor string, e.g. `"Apple"`, `"AMD"`, `"NVIDIA"`, `"Intel"`. On macOS, parsed from `SPDisplays`' `spdisplays_vendor` key with `sppci_vendor_` prefix stripped.
+</ResponseField>
+
+<ResponseField name="driver" type="Option<String>">
+  Driver or Metal family string on macOS (e.g. `"Metal GPUFamily Apple 9"`), or `None` on Linux where this is not easily available from DRM sysfs.
+</ResponseField>
+
+<ResponseField name="vram_total_bytes" type="Option<u64>">
+  Total VRAM or GPU-accessible memory in bytes. Populated from `spdisplays_vram_shared` / `spdisplays_vram` on macOS; `None` on Linux (not exposed by DRM sysfs without NVML or amdgpu-tools).
+</ResponseField>
+
+<ResponseField name="vram_used_bytes" type="Option<u64>">
+  VRAM currently in use in bytes. On macOS, sourced from `In use system memory` in the `IOAccelerator PerformanceStatistics` dict. `None` when the platform does not expose it without sudo.
+</ResponseField>
+
+<ResponseField name="util_pct" type="Option<f32>">
+  GPU utilization percentage (0–100). On macOS, sourced from `Device Utilization %` in `PerformanceStatistics` via `ioreg`. On Linux, read from `gpu_busy_percent` in DRM sysfs (AMDGPU, recent i915). `None` for NVIDIA on Linux without the `gpu-nvidia` cargo feature.
+</ResponseField>
+
+<ResponseField name="temp_c" type="Option<f32>">
+  GPU temperature in degrees Celsius. Currently `None` on both platforms: macOS requires `sudo powermetrics --samplers gpu_power`; Linux requires NVML or hwmon entries that DRM sysfs does not universally expose. Planned for v0.2.
+</ResponseField>
+
+<ResponseField name="power_w" type="Option<f32>">
+  GPU power draw in watts. Same sudo/feature constraints as `temp_c`; currently always `None`.
+</ResponseField>
+
+<ResponseField name="live_data_hint" type="Option<String>">
+  A one-line note explaining what additional data is available and how to unlock it, e.g. `"temperature + per-rail power need \`sudo powermetrics --samplers gpu_power\` (deferred)"`. Empty (`None`) when all supported live fields are already populated.
+</ResponseField>
+
+---
+
+## PowerTick
+
+System power state including source, battery, thermal, and fan data. Refreshed at most every 5 seconds.
+
+```rust
+pub struct PowerTick {
+    pub source: PowerSource,
+    pub battery: Option<BatteryTick>,
+    pub thermal_throttle_pct: Option<u32>,
+    pub thermal_zones: Vec<ThermalZone>,
+    pub fans: Vec<FanTick>,
+    pub system_power_w: Option<f32>,
+    pub live_data_hint: Option<String>,
+}
+```
+
+<ResponseField name="source" type="PowerSource" required>
+  Current power source. One of `Ac`, `Battery`, or `Unknown`. On macOS, derived from `pmset -g batt`'s `"drawing from '…'"` line. On Linux, derived from `/sys/class/power_supply` `type` and `online` files.
+</ResponseField>
+
+<ResponseField name="battery" type="Option<BatteryTick>">
+  Battery state. `None` on desktop systems or when no battery is detected. See `BatteryTick` below.
+</ResponseField>
+
+<ResponseField name="thermal_throttle_pct" type="Option<u32>">
+  Percentage of nominal CPU clock speed currently available (0–100). Values below 100 indicate active thermal throttling. On macOS, sourced from `pmset -g therm`'s `CPU_Speed_Limit` field; `100` when no throttling is reported. On Linux, currently `None` (cpufreq-based collection deferred).
+</ResponseField>
+
+<ResponseField name="thermal_zones" type="Vec<ThermalZone>" required>
+  Thermal sensor readings. Empty on macOS (requires IOReport private API). On Linux, one entry per `/sys/class/thermal/thermal_zone*` directory.
+</ResponseField>
+
+<ResponseField name="fans" type="Vec<FanTick>" required>
+  Fan speed readings. Empty on macOS (requires `sudo powermetrics`). On Linux, sourced from `/sys/class/hwmon/hwmon*/fan*_input`.
+</ResponseField>
+
+<ResponseField name="system_power_w" type="Option<f32>">
+  System-wide power draw in watts. On macOS, derived from battery voltage × |amperage| (only meaningful while on battery; `None` when on AC and the platform cannot measure draw without sudo). On Linux, sourced from `power_now` (µW) with V×I fallback.
+</ResponseField>
+
+<ResponseField name="live_data_hint" type="Option<String>">
+  A one-line explanation of what power data requires elevated privileges, e.g. `"fans + per-component power need \`sudo powermetrics --samplers thermal,smc\` (deferred)"`. `None` when all available data is already present.
+</ResponseField>
+
+<Expandable title="BatteryTick fields">
+
+```rust
+pub struct BatteryTick {
+    pub charge_pct: f32,
+    pub is_charging: bool,
+    pub fully_charged: bool,
+    pub time_remaining_min: Option<u32>,
+    pub cycle_count: Option<u32>,
+    pub health_pct: Option<f32>,
+    pub temp_c: Option<f32>,
+    pub voltage_v: Option<f32>,
+    pub amperage_ma: Option<i32>,
+}
+```
+
+<ResponseField name="charge_pct" type="f32" required>
+  Current battery charge as a percentage (0–100). On macOS, the `CurrentCapacity` field from `ioreg -rn AppleSmartBattery`. On Linux, the `capacity` file under `/sys/class/power_supply/BAT*`.
+</ResponseField>
+
+<ResponseField name="is_charging" type="bool" required>
+  `true` when the battery is actively accepting charge. macOS: `IsCharging` ioreg key. Linux: `status == "Charging"`.
+</ResponseField>
+
+<ResponseField name="fully_charged" type="bool" required>
+  `true` when the battery reports a full charge. macOS: `FullyCharged` ioreg key. Linux: `status == "Full"`.
+</ResponseField>
+
+<ResponseField name="time_remaining_min" type="Option<u32>">
+  Estimated minutes of battery life remaining, from `TimeRemaining` on macOS. Filtered to `None` if the OS reports 0 or a nonsensically large value (≥60,000 minutes). Not currently sourced on Linux.
+</ResponseField>
+
+<ResponseField name="cycle_count" type="Option<u32>">
+  Number of full charge cycles the battery has completed. macOS: `CycleCount` ioreg key. Linux: `cycle_count` sysfs file.
+</ResponseField>
+
+<ResponseField name="health_pct" type="Option<f32>">
+  Battery health as a percentage of design capacity (0–100), clamped. macOS: `MaxCapacity` ioreg key (current full capacity as % of design). Linux: `energy_full / energy_full_design × 100`.
+</ResponseField>
+
+<ResponseField name="temp_c" type="Option<f32>">
+  Battery temperature in degrees Celsius. macOS: `Temperature` ioreg field divided by 100 (reported in centi-Celsius). Linux: `temp` sysfs file divided by 10 (deci-Celsius).
+</ResponseField>
+
+<ResponseField name="voltage_v" type="Option<f32>">
+  Battery voltage in volts. macOS: `Voltage` ioreg field divided by 1000 (millivolts). Linux: `voltage_now` sysfs file divided by 1,000,000 (microvolts).
+</ResponseField>
+
+<ResponseField name="amperage_ma" type="Option<i32>">
+  Current flow in milliamps. Signed: positive means charging, negative means discharging. macOS: `Amperage` ioreg field, reinterpreted as signed. Linux: `current_now` sysfs file divided by 1,000 (microamps). Used together with `voltage_v` to derive `system_power_w` when `power_now` is unavailable.
+</ResponseField>
+
+</Expandable>
+
+---
+
+## ThermalZone
+
+One thermal sensor reading, populated only on Linux from `/sys/class/thermal/thermal_zone*`.
+
+```rust
+pub struct ThermalZone {
+    pub name: String,
+    pub temp_c: f32,
+}
+```
+
+<ResponseField name="name" type="String" required>
+  Zone type string from the `type` sysfs file, e.g. `"x86_pkg_temp"`, `"acpitz"`, `"iwlwifi_1"`. Falls back to the directory name if the file is absent.
+</ResponseField>
+
+<ResponseField name="temp_c" type="f32" required>
+  Temperature in degrees Celsius, converted from millidegrees (the `temp` sysfs file value divided by 1000).
+</ResponseField>
+
+---
+
+## FanTick
+
+One fan speed reading, populated only on Linux from `/sys/class/hwmon/hwmon*/fan*_input`.
+
+```rust
+pub struct FanTick {
+    pub name: String,
+    pub rpm: u32,
+    pub target_rpm: Option<u32>,
+}
+```
+
+<ResponseField name="name" type="String" required>
+  Fan label from the corresponding `fan*_label` sysfs file, e.g. `"CPU fan"`. Falls back to `"fan<N>"` if the label file is absent.
+</ResponseField>
+
+<ResponseField name="rpm" type="u32" required>
+  Current fan speed in revolutions per minute from `fan*_input`.
+</ResponseField>
+
+<ResponseField name="target_rpm" type="Option<u32>">
+  Target RPM from `fan*_target`, if the hwmon driver exposes it. `None` when not available.
+</ResponseField>
+
+---
+
+## Ring\<T\>
+
+The bounded circular buffer that underpins both the scalar metric history and the full `Snapshot` session history.
+
+```rust
+pub struct Ring<T> {
+    cap: usize,
+    inner: VecDeque<T>,
+}
+```
+
+`Ring<T>` wraps a `VecDeque<T>` with a fixed capacity. When `push()` is called and the buffer is full, the oldest element is dropped from the front before the new value is appended to the back. All ring instances in `History` are created with `cap = 120`, giving approximately two minutes of history at the default 1 Hz tick rate.
+
+The key method for the scrubber is `nth_back(n: usize) -> Option<&T>`, which returns the element `n` positions behind the most recent entry (`0` is the newest, `cap - 1` is the oldest). `App::displayed_snap()` calls `history.session.nth_back(scrub_offset)` to serve historical snapshots to every tab renderer transparently.
+
+---
+
+## History
+
+Parallel ring buffers for scalar metrics plus the full session ring. One `History` instance lives in `App` for the lifetime of the process.
+
+```rust
+pub struct History {
+    pub cpu: Ring<f32>,
+    pub mem: Ring<f32>,
+    pub swap: Ring<u64>,
+    pub net_rate: Ring<f64>,
+    pub io_rate: Ring<f64>,
+    pub proc_cpu_ewma: HashMap<u32, f32>,
+    pub session: Ring<Snapshot>,
+}
+```
+
+<ResponseField name="cpu" type="Ring<f32>" required>
+  Aggregate CPU usage percentage (0–100) per tick, mirrored from `Snapshot::cpu::usage_pct`. Used by the Overview sparkline and the CPU tab's history graph.
+</ResponseField>
+
+<ResponseField name="mem" type="Ring<f32>" required>
+  Memory used / total ratio (0–1) per tick. The memory-pressure heuristic averages the last 6 values in this ring.
+</ResponseField>
+
+<ResponseField name="swap" type="Ring<u64>" required>
+  Swap used in bytes per tick. The swap-thrash heuristic compares the most recent value against the value 30 ticks earlier.
+</ResponseField>
+
+<ResponseField name="net_rate" type="Ring<f64>" required>
+  Aggregate network throughput (rx + tx bytes/sec summed across all interfaces) per tick.
+</ResponseField>
+
+<ResponseField name="io_rate" type="Ring<f64>" required>
+  Aggregate disk throughput (read + write bytes/sec) per tick.
+</ResponseField>
+
+<ResponseField name="proc_cpu_ewma" type="HashMap<u32, f32>" required>
+  Per-process CPU exponential weighted moving average, keyed by PID. Updated each tick with `alpha = 0.3` (approximately 5 ticks to stabilize). PIDs absent from the current snapshot are pruned immediately so the map never holds stale entries. The runaway-process heuristic reads this map to distinguish sustained load from transient spikes.
+</ResponseField>
+
+<ResponseField name="session" type="Ring<Snapshot>" required>
+  Full `Snapshot` values in tick order, capacity 120. This is the foundation of the session scrubber: `App::displayed_snap()` indexes into this ring via `nth_back(scrub_offset)` to serve any tab a view of system state at any point in the last two minutes.
+</ResponseField>

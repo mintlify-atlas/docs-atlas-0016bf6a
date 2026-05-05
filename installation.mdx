@@ -1,0 +1,78 @@
+---
+title: "Installing SysWatch on macOS and Linux"
+description: "Build SysWatch from source with Cargo, install via Homebrew, or enable optional features for NVIDIA GPU stats and SMART disk health reporting."
+---
+
+SysWatch ships as a single Rust binary with no runtime dependencies on Linux. This page covers the prerequisites for each platform, the primary build-from-source method, the draft Homebrew tap, and the optional cargo features that unlock NVIDIA GPU stats and SMART disk health.
+
+<Note>
+  Crates.io publishing and pre-built binaries will land alongside the v0.1 release. Until then, build from source using the instructions below.
+</Note>
+
+## Prerequisites
+
+<Tabs>
+  <Tab title="Linux">
+    - **Rust 1.75 or later.** Install via [rustup](https://rustup.rs): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+    - No system libraries or additional packages are required. SysWatch reads `/proc`, `/sys`, and other sysfs interfaces directly.
+  </Tab>
+  <Tab title="macOS">
+    - **Rust 1.75 or later.** Install via [rustup](https://rustup.rs): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+    - The build links against macOS system frameworks (`CoreFoundation`, `IOKit`, `DiskArbitration`). These are part of the Xcode Command Line Tools — run `xcode-select --install` if you have not already.
+    - No third-party system libraries are required.
+  </Tab>
+</Tabs>
+
+## Build from source
+
+Building from source is the primary installation method for v0.1.
+
+```bash
+git clone https://github.com/matthart1983/syswatch.git && cd syswatch
+cargo build --release
+./target/release/syswatch
+```
+
+To make the binary available on your `PATH`, copy it to a directory that is already in `PATH`:
+
+```bash
+cp target/release/syswatch ~/.local/bin/syswatch
+```
+
+## Homebrew (draft — v0.1 release)
+
+A Homebrew formula is included in the repository and will be published to the `matthart1983/tap` tap when v0.1.0 is tagged. The url and sha256 in the formula are placeholders until that release.
+
+```bash
+brew install matthart1983/tap/syswatch
+```
+
+<Warning>
+  The formula is not yet published. Running the command above will fail until v0.1.0 is tagged. Use the build-from-source method in the meantime.
+</Warning>
+
+## Optional cargo features
+
+SysWatch has two optional features that are disabled by default. Both require additional software on the host.
+
+### `gpu-nvidia` — NVIDIA live GPU stats
+
+Enables live GPU utilisation, memory, temperature, and power via `nvml-wrapper`, which talks to the NVIDIA Management Library (NVML). Requires a host with an NVIDIA GPU and the NVIDIA driver installed.
+
+```bash
+cargo build --release --features gpu-nvidia
+```
+
+### `smart` — SMART disk health
+
+Enables disk health data from `smartctl --json` (part of `smartmontools`). On Linux, install `smartmontools` via your package manager; on macOS, install via Homebrew (`brew install smartmontools`). Most drives require `smartctl` to run as root.
+
+```bash
+cargo build --release --features smart
+```
+
+To enable both features at once:
+
+```bash
+cargo build --release --features gpu-nvidia,smart
+```

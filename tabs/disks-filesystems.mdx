@@ -1,0 +1,152 @@
+---
+title: 'Disks & Filesystems Tabs — IO Rates and Mount Usage'
+description: 'Monitor aggregate block device IO throughput and per-mount disk usage with color-coded capacity bars, replacing iostat, iotop, df -h, and mount in one TUI.'
+---
+
+The Disks tab (key `4`) and Filesystems tab (key `5`) cover two complementary questions: *how fast is data moving through the storage stack right now*, and *how full are the volumes*. Together they replace `iostat` for throughput, `iotop` for aggregate IO accounting, `df -h` for capacity, and `mount` for enumerating what is mounted.
+
+<Tabs>
+  <Tab title="Disks (key 4)">
+
+## Disks tab
+
+Press `4` to open the Disks tab, or `Tab`/`Shift-Tab` to cycle to it.
+
+### Block devices panel
+
+The upper panel lists all device-backed mounts — it filters out pseudo-filesystems like `tmpfs`, `/dev`, and `/proc`, keeping only volumes backed by real storage (APFS, ext4, XFS, Btrfs, ZFS, NTFS, HFS). The panel title shows the device count and the current aggregate read and write rates:
+
+```
+BLOCK DEVICES  3     aggregate 42.1 MiB/s read  8.3 MiB/s write
+```
+
+Each row shows:
+
+| Column | Description |
+|--------|-------------|
+| `●` dot | Color-coded by usage %: green < 70 %, yellow 70–90 %, red ≥ 90 % |
+| `DEVICE` | Device node, e.g. `/dev/sda1` or `disk0s1` |
+| `MOUNT` | Mount point |
+| `FS` | Filesystem type |
+| `SIZE` | Total capacity in human-readable bytes |
+| `USED` | Usage percentage |
+| Bar | Proportional block bar |
+
+Source: `DiskUsageTick` entries filtered to device-backed mounts.
+
+### Throughput panel
+
+The bottom section (fixed 7 rows) shows aggregate IO across all block devices as a sparkline and live counters:
+
+- **Sparkline (left, ~70 % width):** Session history of combined read + write rate normalized to the peak observed in the ring buffer.
+- **Counters (right, ~30 % width):**
+
+  | Field | Description |
+  |-------|-------------|
+  | `read` | Current read rate in bytes/sec. Source: `DiskIoTick.read_rate`. |
+  | `write` | Current write rate in bytes/sec. Source: `DiskIoTick.write_rate`. |
+  | `peak` | Highest combined rate seen in the current session. |
+  | `session` | Total bytes read and written since SysWatch started. Sources: `DiskIoTick.read_bytes_total`, `DiskIoTick.write_bytes_total`. |
+
+<Note>
+**Linux vs macOS IO collection differ in precision.**
+
+On Linux, aggregate IO is read directly from `/proc/diskstats` via the netwatch-sdk collector. This captures all kernel block layer activity regardless of which process caused it, including kernel threads and background flushes.
+
+On macOS, `/proc/diskstats` does not exist. SysWatch falls back to summing `total_read_bytes` and `total_written_bytes` across all tracked processes from sysinfo. This is less precise — it misses IO attributed to kernel threads and may under-report during periods of heavy buffered writes. The rates are still directionally correct and useful for spotting sustained IO spikes.
+</Note>
+
+### Data model
+
+```rust
+pub struct DiskIoTick {
+    pub read_bytes_total: u64,  // cumulative bytes read since boot (or process start on macOS)
+    pub write_bytes_total: u64, // cumulative bytes written
+    pub read_rate: f64,         // bytes/sec read, computed from delta between ticks
+    pub write_rate: f64,        // bytes/sec written, computed from delta between ticks
+}
+```
+
+### Replaces
+
+`iostat -d` · `iotop` aggregate view
+
+  </Tab>
+  <Tab title="Filesystems (key 5)">
+
+## Filesystems tab
+
+Press `5` to open the Filesystems tab, or `Tab`/`Shift-Tab` to cycle to it.
+
+### Mount list
+
+The Filesystems tab lists *every* mounted filesystem — including pseudo-filesystems that the Disks tab filters out — sorted descending by usage percentage so the fullest volumes appear at the top. The panel title summarizes the fleet:
+
+```
+MOUNTS  8     5 healthy  2 nearing full  1 critical
+```
+
+Each row shows:
+
+| Column | Description |
+|--------|-------------|
+| `●` dot | Color-coded by usage %: green < 70 %, yellow 70–90 %, red ≥ 90 % |
+| `MOUNT POINT` | Where the filesystem is mounted |
+| `DEVICE` | Backing device or label |
+| `FS` | Filesystem type |
+| `SIZE` | Total capacity in human-readable bytes |
+| `USED` | Usage percentage |
+| Bar | Proportional block bar |
+
+The list scrolls to accommodate more mounts than the terminal height.
+
+### Disk full heuristic
+
+The Insights engine watches `usage_pct` on every `DiskUsageTick` entry and fires:
+
+- **WARN** when any mount reaches **85 %** usage
+- **CRIT** when any mount reaches **95 %** usage
+
+Both thresholds are checked every tick. When triggered, the alert surfaces in the Insights strip on the Overview tab and links back to this tab.
+
+### Data model
+
+```rust
+pub struct DiskUsageTick {
+    pub mount_point: String,    // e.g. "/" or "/home"
+    pub device: String,         // e.g. "/dev/sda1" or "disk0s2"
+    pub fs_type: String,        // e.g. "ext4", "apfs", "tmpfs"
+    pub total_bytes: u64,       // total capacity
+    pub used_bytes: u64,        // bytes in use
+    pub available_bytes: u64,   // bytes available to userspace
+    pub usage_pct: f32,         // used / total * 100, 0..100
+}
+```
+
+`available_bytes` may be less than `total_bytes - used_bytes` on filesystems that reserve blocks for root (e.g. ext4 reserves 5 % by default).
+
+### Replaces
+
+`df -h` · `df -i` · `mount`
+
+  </Tab>
+</Tabs>
+
+## Keyboard shortcuts (both tabs)
+
+| Key | Action |
+|-----|--------|
+| `4` | Jump to Disks tab |
+| `5` | Jump to Filesystems tab |
+| `Tab` / `Shift-Tab` | Cycle to next / previous tab |
+| `←` / `→` | Scrub session history backward / forward |
+| `p` | Pause live collection |
+
+<CardGroup cols={2}>
+  <Card title="Overview" icon="gauge" href="/tabs/overview">
+    KPI summary tiles and Insights strip for all subsystems.
+  </Card>
+  <Card title="CPU & Memory" icon="microchip" href="/tabs/cpu-memory">
+    Per-core utilization, load averages, RAM pressure, and swap usage.
+  </Card>
+</CardGroup>

@@ -1,0 +1,145 @@
+---
+title: 'Platform Support: macOS and Linux Coverage Details'
+description: 'Which metrics SysWatch collects on macOS (Apple Silicon and Intel) versus Linux, what requires sudo, and what is deferred to a future release.'
+---
+
+SysWatch targets macOS and Linux. All twelve tabs render real data on both platforms — nothing is faked. Where a metric is unavailable without elevated privileges, the relevant tab displays what it can collect for free and shows a one-line `live_data_hint` explaining the gap. SysWatch never prompts for a password.
+
+<Note>
+  Every metric shown in the UI is sourced from an actual system call, sysfs read, or subprocess output. If a value cannot be collected without escalation, the field is left blank and the hint explains why. No placeholder values are ever displayed.
+</Note>
+
+<Tabs>
+  <Tab title="macOS">
+    ## Apple Silicon GPU
+
+    On Apple Silicon, GPU utilisation percentage and VRAM in use are read from `ioreg -r -d 1 -w 0 -c IOAccelerator`, which queries the `AGXAccelerator` class's `PerformanceStatistics` dictionary. This includes:
+
+    - `Device Utilization %` — overall GPU engine utilisation
+    - `Renderer Utilization %` and `Tiler Utilization %` — pipeline stage breakdown
+    - `In use system memory` — VRAM currently allocated to the GPU
+
+    No `sudo` is required. GPU identity (model name, vendor, driver Metal family, total VRAM) is discovered once at startup via `system_profiler SPDisplaysDataType -json`.
+
+    <Warning>
+      GPU temperature and per-rail power draw require `sudo powermetrics --samplers gpu_power`. These are deferred and not shown in v0.1. The GPU tab's `live_data_hint` explains what is missing.
+    </Warning>
+
+    ## Battery and power source
+
+    Battery state — charge percentage, health percentage, cycle count, voltage, amperage, temperature, and estimated time remaining — is read from `ioreg -rn AppleSmartBattery`. No `sudo` is required.
+
+    System power draw is derived from the battery's voltage and amperage values (V × |A| / 1000). Power source (AC vs Battery) is determined from `pmset -g batt`.
+
+    Thermal throttling is read from `pmset -g therm` as `CPU_Speed_Limit`. When no throttle is active, this returns 100%.
+
+    Power data refreshes every 5 seconds rather than every tick to avoid spawning multiple subprocesses per second.
+
+    <Warning>
+      Fan speeds and per-component power (CPU package, GPU rail, DRAM) require `sudo powermetrics --samplers thermal,smc`. These are deferred and shown only as a hint in the Power tab.
+    </Warning>
+
+    ## Thermal zones
+
+    Exposing macOS thermal zone temperatures requires the IOReport private framework via FFI. This is deferred to v0.2. The Power tab shows battery temperature from `AppleSmartBattery` as a substitute.
+
+    ## Services
+
+    Services are enumerated via `launchctl list`. Each entry exposes its label, status, and PID.
+
+    ## Disk IO
+
+    Linux exposes precise per-device IO accounting through `/proc/diskstats`. macOS does not have an equivalent that is free of sudo. SysWatch falls back to summing per-process IO from `sysinfo`, which is less precise (it counts process-level IO, not device-level throughput).
+
+    ## Network
+
+    Network interface counters are collected via `getifaddrs` through the `netwatch-sdk` platform collector. This is the same parser used by the NetWatch agent, so SysWatch and NetWatch agree on interface counters.
+  </Tab>
+
+  <Tab title="Linux">
+    ## GPU
+
+    GPU devices are discovered by scanning `/sys/class/drm/card*`. Vendor and device IDs are read from the PCI sysfs attributes (`vendor`, `device`) under each card's `device/` directory. Vendor IDs are mapped to human-readable names (NVIDIA `0x10de`, AMD `0x1002`, Intel `0x8086`).
+
+    Per-tick utilisation is read from `gpu_busy_percent` under each card's `device/` path. This is exposed by the `amdgpu` and recent `i915` kernel drivers. NVIDIA cards require the `nvml-wrapper` feature gate (see [Optional features](#optional-features)).
+
+    No `sudo` is required for any of the above.
+
+    ## Thermal zones
+
+    All thermal zones under `/sys/class/thermal/thermal_zone*/` are read each tick. The zone type string (e.g. `x86_pkg_temp`, `acpitz`, `iwlwifi_1`) is used as the display label; temperature is the `temp` file value divided by 1000 (millidegrees to degrees Celsius). No `sudo` is required.
+
+    ## Battery and power
+
+    Battery state is read from `/sys/class/power_supply/BAT*/`:
+
+    | sysfs file | Field |
+    |---|---|
+    | `capacity` | Charge percentage |
+    | `status` | Charging / Discharging / Full |
+    | `cycle_count` | Charge cycles |
+    | `voltage_now` | Voltage in microvolts |
+    | `current_now` | Current in microamps |
+    | `temp` | Temperature in deci-Celsius |
+    | `energy_full` / `energy_full_design` | Health percentage |
+
+    System power draw is read from `power_now` (microwatts) when the kernel exposes it; otherwise it is derived from `voltage_now × current_now`.
+
+    Power source is determined from the first `Mains` or `UPS` supply whose `online` file is `1`.
+
+    Fan speeds are read from `/sys/class/hwmon/hwmon*/fan*_input`. Labels come from the corresponding `fan*_label` files.
+
+    No `sudo` is required for any power or thermal data on Linux.
+
+    ## Services
+
+    Services are enumerated via `systemctl list-units`. Each entry exposes its unit name, active state, and main PID.
+
+    ## Disk IO
+
+    Linux disk IO counters come from `/proc/diskstats` via the `netwatch-sdk` platform collector. This provides precise read and write byte counts at the block-device level, aggregated across all devices for the Disks tab.
+
+    ## Network
+
+    Network counters are read from sysfs (`/sys/class/net/*/statistics/`) via the `netwatch-sdk` platform collector. This is the same parser the NetWatch agent uses.
+  </Tab>
+</Tabs>
+
+## Optional features
+
+Two capabilities are feature-gated in `Cargo.toml` because they require external tools or libraries not guaranteed to be present:
+
+### `gpu-nvidia` — NVIDIA live GPU stats
+
+Enable with `cargo build --features gpu-nvidia`. This links against [`nvml-wrapper`](https://crates.io/crates/nvml-wrapper), which wraps NVIDIA's NVML library. When enabled, the GPU tab shows live utilisation, temperature, VRAM usage, and power draw for NVIDIA cards on Linux.
+
+Without this feature, NVIDIA cards are detected via PCI ID but show no live metrics. The `live_data_hint` on the GPU tab explains what to enable.
+
+### `smart` — SMART disk health
+
+Enable with `cargo build --features smart`. When enabled, the Disks tab queries `smartctl --json` for each physical drive and shows health attributes: reallocated sector count, power-on hours, temperature, and overall health assessment.
+
+`smartctl` typically requires `sudo` or a `sudo`-equivalent capability. Without elevated access, SysWatch falls back to the same usage data it shows without the feature.
+
+<Note>
+  Both features are opt-in. The default build has no external dependencies beyond the system frameworks and `sysinfo`. Feature flags are designed so you can enable exactly what your environment supports without affecting the rest of the binary.
+</Note>
+
+## Capability summary
+
+| Metric | macOS (no sudo) | macOS (sudo) | Linux (no sudo) |
+|---|---|---|---|
+| CPU usage | Yes | — | Yes |
+| Memory / swap | Yes | — | Yes |
+| Disk IO | Approximate | — | Precise (`/proc/diskstats`) |
+| Filesystem usage | Yes | — | Yes |
+| Process list | Yes | — | Yes |
+| Network counters | Yes | — | Yes |
+| GPU util + VRAM (Apple Silicon) | Yes | — | Yes (AMDGPU/i915) |
+| GPU temperature + power | Deferred | `powermetrics` | Yes (NVIDIA: feature flag) |
+| Battery state | Yes (ioreg) | — | Yes (sysfs) |
+| Fans | — | `powermetrics` | Yes (hwmon) |
+| Per-component power | — | `powermetrics` | Yes (sysfs) |
+| Thermal zones | Deferred (IOReport) | — | Yes (sysfs) |
+| Services | Yes (launchctl) | — | Yes (systemctl) |
+| SMART disk health | Optional (`smart` feature) | Often needed | Optional (`smart` feature) |

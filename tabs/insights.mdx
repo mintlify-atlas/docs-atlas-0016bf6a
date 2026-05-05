@@ -1,0 +1,127 @@
+---
+title: 'Insights Tab: Heuristic Anomaly Detection'
+description: 'Six built-in heuristics evaluate swap thrash, runaway processes, memory pressure, disk usage, load, and zombies every tick — surfaced as plain-English cards.'
+---
+
+The Insights tab (`+`) runs a set of heuristic checks against the current session history every tick and presents any anomalies as readable diagnostic cards. Each card names the problem, gives concrete numbers, and points you to the best tab to investigate further. Nothing is written, nothing is restarted, and no external tools are invoked — Insights is entirely read-only.
+
+## How it works
+
+Six pure functions receive the rolling `History` and the current `Snapshot` as input. Each function either returns an `Insight` or returns nothing. The results are sorted by severity — critical findings appear first — and capped at six cards to keep the screen readable. The checks re-run on every tick, so cards appear and clear automatically as conditions change.
+
+<Info>
+Insights are computed from the in-memory session ring. They require no configuration files, no background daemons, and no elevated permissions. The footer on the Insights tab reads: *"Insights are read-only suggestions — they never modify processes, files, or services."*
+</Info>
+
+## Severity levels
+
+Each insight carries one of three severity labels:
+
+| Severity | Label | Meaning |
+|---|---|---|
+| Critical | `CRIT` | Condition is severe and likely causing impact now |
+| Warning | `WARN` | Condition is abnormal and likely to worsen |
+| Info | `INFO` | Informational; not shown in the badge count |
+
+Cards are sorted `CRIT` first, then `WARN`, then `INFO`. When all six heuristics return nothing, the tab shows an all-clear card.
+
+## The `[+]` badge
+
+The tab bar displays a `[+]` badge with the count of active non-Info insights (that is, the sum of `CRIT` + `WARN` cards currently showing). The Overview tab's bottom strip also surfaces active insights, so you can see them without leaving your main dashboard view.
+
+## Suggested tab
+
+Every insight includes a `suggested_tab` field. The card displays it as `→ open <Tab> tab` in the card footer. Pressing the corresponding tab key takes you directly to the most relevant view for that anomaly — for example, a swap thrash card points to Memory, a runaway process card points to Procs.
+
+## Heuristics
+
+<AccordionGroup>
+  <Accordion title="Swap thrash">
+    Fires when swap usage grows significantly over the most recent ~30-second window, indicating that the kernel is actively paging memory out under pressure.
+
+    **Prerequisites:** at least 8 samples in the session ring, and current swap usage ≥ 64 MiB.
+
+    | Severity | Condition |
+    |---|---|
+    | `WARN` | Swap grew ≥ 100 MiB over the last ~30 ticks |
+    | `CRIT` | Swap grew ≥ 512 MiB over the last ~30 ticks |
+
+    The card body shows the current swap used vs. total configured, and identifies the process holding the largest resident set. Suggested tab: **Memory**.
+  </Accordion>
+
+  <Accordion title="Runaway process">
+    Uses an exponentially weighted moving average (EWMA, α = 0.3) of per-process CPU usage, updated every tick. Because the average decays slowly, a single brief spike does not trigger the heuristic — only sustained high CPU does.
+
+    | Severity | Condition |
+    |---|---|
+    | `WARN` | Highest EWMA CPU ≥ 50% |
+    | `CRIT` | Highest EWMA CPU ≥ 90% |
+
+    The card shows the process name, PID, instantaneous CPU percentage, resident set size, process state, owning user, and parent PID. Suggested tab: **Procs**.
+
+    <Tip>
+    Because EWMA smooths transient spikes, a process that briefly pegs one core during a compilation step will not trigger this heuristic. Only a process that sustains high CPU over several ticks will appear.
+    </Tip>
+  </Accordion>
+
+  <Accordion title="Disk full">
+    Checks every mounted filesystem with a non-zero total size and reports the most-full mount above the warn threshold.
+
+    | Severity | Condition |
+    |---|---|
+    | `WARN` | Most-full mount ≥ 85% utilized |
+    | `CRIT` | Most-full mount ≥ 95% utilized |
+
+    The card shows free space, filesystem type, and a count of any additional mounts also above 85%. Suggested tab: **FS**.
+  </Accordion>
+
+  <Accordion title="Memory pressure">
+    Computes a 6-sample rolling average of the RAM used/total ratio. Single-tick spikes (for example, a brief memory allocation burst) do not fire the heuristic; the average must be sustained.
+
+    **Prerequisites:** at least 3 samples in the session ring.
+
+    | Severity | Condition |
+    |---|---|
+    | `WARN` | 6-sample average RAM ratio ≥ 85% |
+    | `CRIT` | 6-sample average RAM ratio ≥ 95% |
+
+    The card shows used, total, and available bytes, and notes that sustained high pressure typically precedes swap activity or OOM kills. Suggested tab: **Memory**.
+  </Accordion>
+
+  <Accordion title="High load">
+    Compares the 1-minute load average (`load_1`) against the number of logical CPU cores. Load below 1.5× core count is not surfaced; the heuristic only fires for more significant saturation.
+
+    | Severity | Condition |
+    |---|---|
+    | `WARN` | `load_1` ≥ 2× core count |
+    | `CRIT` | `load_1` ≥ 4× core count |
+
+    The card shows all three load averages (1m / 5m / 15m) and the saturation multiplier. Suggested tab: **CPU**.
+
+    <Note>
+    A load between 1.5× and 2× cores is considered elevated but not anomalous enough to surface as a warning. The heuristic fires at the 2× threshold, where a run-queue backlog is forming.
+    </Note>
+  </Accordion>
+
+  <Accordion title="Zombie party">
+    Counts processes in state `Z` (zombie). A small number of short-lived zombies is normal; a growing pile indicates a parent process is not calling `wait()` after its children exit.
+
+    | Severity | Condition |
+    |---|---|
+    | `WARN` | ≥ 5 zombie processes |
+    | `CRIT` | ≥ 25 zombie processes |
+
+    The card lists up to five distinct parent PIDs of the zombie group and notes that zombies hold no resources but indicate a bug in the parent. Suggested tab: **Procs**.
+  </Accordion>
+</AccordionGroup>
+
+## Card layout
+
+Each card renders with a colored left stripe and severity badge (`CRIT` / `WARN`), a bold title with current values, up to three body lines of supporting detail, and a suggested-tab footer. Cards are stacked vertically; up to six fit on screen at standard terminal heights. If more than six heuristics fire simultaneously, the lowest-severity cards are dropped.
+
+## What Insights does not do
+
+- It does not kill, renice, or otherwise modify any process.
+- It does not write to disk or send data anywhere.
+- It does not require root or elevated permissions.
+- It does not replace monitoring systems for production fleets — it is a single-host, in-session diagnostic only.

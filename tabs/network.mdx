@@ -1,0 +1,69 @@
+---
+title: "Network tab — per-interface throughput in SysWatch"
+description: "Key 0 opens the Net tab, showing live rx/tx rates, cumulative byte counters, and an aggregate sparkline for every network interface on the host."
+---
+
+The Net tab (key `0`) shows live per-interface bandwidth and cumulative byte totals for every network interface the collector can see. Interfaces are sorted alphabetically by name and updated at the 1 Hz fast-loop cadence.
+
+## Layout
+
+The tab is divided into two sections:
+
+**Top — aggregate sparkline.** A full-width sparkline traces the combined `rx + tx` rate over the session history ring. The right column shows four current figures:
+
+| Label | Value |
+|-------|-------|
+| `now` | Total rx + tx rate across all interfaces |
+| `rx` | Aggregate receive rate |
+| `tx` | Aggregate transmit rate |
+| `peak` | Highest combined rate seen this session |
+| `ifaces` | Number of interfaces in the snapshot |
+
+**Bottom — interface table.** One row per interface with the following columns:
+
+| Column | Field | Notes |
+|--------|-------|-------|
+| NAME | `name` | Interface name (`en0`, `eth0`, `lo`, etc.) |
+| STATE | `is_up` | `UP` in green or `DOWN` in dim |
+| RX/s | `rx_rate` | Receive bytes/sec |
+| TX/s | `tx_rate` | Transmit bytes/sec |
+| RX TOTAL | `rx_bytes` | Cumulative bytes received since the interface came up |
+| TX TOTAL | `tx_bytes` | Cumulative bytes transmitted since the interface came up |
+
+Rates are formatted with human-readable SI prefixes (e.g., `12.4 MB/s`). Cumulative totals use the same formatter.
+
+## Data sources and netwatch-sdk
+
+<Note>
+SysWatch shares its network byte-counter parsers with the NetWatch agent through [`netwatch-sdk`](https://github.com/matthart1983/netwatch), a sibling project with the same chrome and palette. Both tools read the same sysfs paths on Linux and the same `getifaddrs`-based collector on macOS, so the numbers they report for a given interface will match.
+</Note>
+
+On Linux, interface counters come from sysfs (`/proc/net/dev` or `/sys/class/net/<iface>/statistics/`). On macOS, `getifaddrs` provides the byte totals. These platform collectors are implemented in `netwatch-sdk` and imported by SysWatch, ensuring a single source of truth for network I/O accounting.
+
+When the platform collector is unavailable, SysWatch falls back to the `sysinfo` cross-platform crate, which provides the same `InterfaceTick` fields with potentially less granularity.
+
+## Overview sparkline
+
+The aggregate `rx + tx` rate is pushed into `History.net_rate` on every tick. The Overview tab (key `1`) reads this same ring to draw its network sparkline, so the two views are always in sync.
+
+## Replaces
+
+`nettop` (macOS), `iftop` (Linux)
+
+## Keyboard shortcuts
+
+| Key | Action |
+|---|---|
+| `0` | Jump to Net tab |
+| `Tab` / `Shift-Tab` | Cycle to next / previous tab |
+| `←` / `→` | Scrub session history backward / forward |
+| `p` | Pause live collection |
+
+<CardGroup cols={2}>
+  <Card title="Platform notes" icon="microchip" href="/features/platform-notes">
+    How network counters differ between Linux (sysfs) and macOS (getifaddrs).
+  </Card>
+  <Card title="Overview tab" icon="gauge" href="/tabs/overview">
+    The aggregate network sparkline on the Overview uses the same ring data.
+  </Card>
+</CardGroup>

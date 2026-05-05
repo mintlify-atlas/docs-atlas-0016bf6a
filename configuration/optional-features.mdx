@@ -1,0 +1,80 @@
+---
+title: 'SysWatch optional cargo features: GPU and SMART'
+description: 'Build SysWatch with gpu-nvidia for NVIDIA live GPU stats or smart for SMART disk health. Covers runtime dependencies and combined build examples.'
+---
+
+SysWatch ships two optional cargo feature flags that unlock additional data collection. Neither is compiled in by default because each introduces a native dependency that may not be present on every host. You enable them at compile time by passing `--features` to Cargo.
+
+## `gpu-nvidia` — NVIDIA GPU live stats
+
+The `gpu-nvidia` feature enables live GPU metrics for NVIDIA cards via the [`nvml-wrapper`](https://crates.io/crates/nvml-wrapper) crate, which wraps the NVML (NVIDIA Management Library) C API.
+
+When the feature is active, the GPU tab gains:
+
+- GPU utilization percentage
+- GPU memory used and total
+- Temperature and fan speed (where the driver exposes them)
+- Per-process GPU memory (where available)
+
+Without this feature, the GPU tab falls back to basic info sourced from sysfs on Linux (device name, driver version) or shows nothing on macOS for NVIDIA cards, since macOS does not expose NVML.
+
+<Note>
+  The NVIDIA driver must be installed on the host at runtime, and the NVML shared library (`libnvidia-ml.so` on Linux) must be accessible. The binary will start without the library present, but the GPU tab will show a collection error instead of live data.
+</Note>
+
+## `smart` — SMART disk health
+
+The `smart` feature enables per-disk health data by shelling out to `smartctl --json` from the `smartmontools` suite.
+
+When the feature is active, the Disks tab gains:
+
+- SMART overall health assessment (PASSED / FAILED)
+- Reallocated sector count and other critical attributes
+- Power-on hours and start-stop cycle count
+- Temperature reported by the drive's SMART data
+
+Without this feature, the Disks tab shows aggregate IO rates and filesystem usage only. No health or SMART attribute data is displayed.
+
+<Note>
+  `smartmontools` must be installed on the host at runtime. On most systems, reading SMART data requires elevated privileges (`sudo`) or the binary must have the `cap_sys_rawio` capability set. If `smartctl` is not found or exits with a permission error, the Disks tab falls back to the no-SMART view gracefully.
+
+  Install `smartmontools` via your package manager:
+  - **Debian / Ubuntu:** `apt install smartmontools`
+  - **Fedora / RHEL:** `dnf install smartmontools`
+  - **macOS (Homebrew):** `brew install smartmontools`
+</Note>
+
+## Building with features
+
+<CodeGroup>
+
+```bash gpu-nvidia only
+cargo build --release --features gpu-nvidia
+```
+
+```bash smart only
+cargo build --release --features smart
+```
+
+```bash both features
+cargo build --release --features gpu-nvidia,smart
+```
+
+```bash default (no optional features)
+cargo build --release
+```
+
+</CodeGroup>
+
+Feature flags apply to both debug and release builds. For development you can substitute `build --release` with `run`:
+
+```bash
+cargo run --features smart -- --tab disks
+```
+
+## Feature summary
+
+| Feature | Data added | Runtime dependency |
+|---|---|---|
+| `gpu-nvidia` | NVIDIA GPU utilization, memory, temperature | NVIDIA driver + NVML library |
+| `smart` | Disk health assessment, SMART attributes | `smartmontools` (`smartctl` in PATH) |

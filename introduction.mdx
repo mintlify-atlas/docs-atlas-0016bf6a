@@ -1,0 +1,66 @@
+---
+title: "SysWatch: terminal diagnostics for one host"
+description: "SysWatch is a read-only terminal UI for macOS and Linux with twelve diagnostic tabs replacing htop, iostat, vm_stat, and a dozen one-liners."
+---
+
+SysWatch is a single-host diagnostics tool that runs in your terminal. It covers every subsystem on one box — CPU, memory, disks, filesystems, processes, GPU, power, services, and networking — and adds two capabilities that have no command-line equivalent: a session Timeline you can scrub backward and an Insights engine that surfaces anomalies in plain English. This page describes what SysWatch is, what it solves, and where it deliberately stops.
+
+## The problem it solves
+
+When something feels off on a host, the usual workflow is to open `htop`, then `iostat`, then `vm_stat` (or `free`), then `nettop` or `iftop`, and mentally correlate numbers across four separate windows. SysWatch replaces that notebook-of-one-liners workflow with a single TUI where all twelve subsystem panels share the same clock and the same session ring buffer.
+
+Where `htop` shows you *what's running*, SysWatch shows you *what's happening* — across CPU, memory, IO, GPU, power, and services — and tells you why in plain English when something is anomalous.
+
+## The twelve tabs
+
+SysWatch is organised into twelve tabs, each replacing one or more standard tools:
+
+| Key | Tab | Replaces |
+|---|---|---|
+| `1` | Overview | Dashboard view of all subsystems |
+| `2` | CPU | `htop` CPU panel, `top -d`, `mpstat` |
+| `3` | Memory | `free`, `vm_stat`, `htop` mem panel |
+| `4` | Disks | `iostat`, `iotop` aggregate |
+| `5` | Filesystems | `df -h`, `df -i`, `mount` |
+| `6` | Procs | `htop`, `ps auxf`, `pstree` |
+| `7` | GPU | `ioreg AGXAccelerator PerformanceStatistics` / `/sys/class/drm` |
+| `8` | Power | `pmset`, `ioreg AppleSmartBattery` / `/sys/class/power_supply` |
+| `9` | Services | `launchctl list` / `systemctl list-units` |
+| `0` | Net | `nettop`, `iftop` |
+| `-` | Timeline | No equivalent — session log with scrubber |
+| `+` | Insights | No equivalent — plain-English anomaly cards |
+
+## What makes it distinctive
+
+**Insights engine.** SysWatch runs heuristic anomaly detection over your rolling session — swap thrash, runaway processes, disk full, memory pressure, high load, zombie parties. Each anomaly surfaces as a plain-English card with a suggested tab to investigate. The Overview strip and the tab bar's `[+]` badge keep anomaly counts visible from every tab.
+
+**Session-wide scrubbing.** The Timeline tab lets you rewind the entire application with `←` and `→`. Every panel transparently shows historical state — the same CPU graph, the same process table, the same disk counters — at whatever point in the session you scrub to. The session ring buffer is the foundation that Snapshot/Diff and Recording will build on in v0.2.
+
+**Honest about platform limits.** Where data requires elevated privileges — `powermetrics` for fans, per-component power, GPU utilisation on Apple Silicon — the relevant tab shows what it can get for free and a one-line note about what is gated. Nothing is faked; nothing prompts for your password.
+
+## Anti-goals
+
+SysWatch is deliberately narrow. It does not try to be:
+
+- **Multi-host.** SysWatch diagnoses the machine it runs on. For fleet view, see NetWatch's web dashboard.
+- **A daemon.** There is no long-running collector and no Prometheus push. The in-memory session ring is the only database.
+- **Interactive remediation.** SysWatch is strictly read-only. It will not kill, renice, unmount, or restart anything.
+- **A logging product.** SysWatch surfaces OOM kills as a signal in the Memory tab; it is not a log search UI.
+- **Chart eye-candy.** Block sparklines, real numbers, no smooth curves, no swappable themes.
+
+## Get started
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Build from source with Cargo or install via the Homebrew tap. Requires Rust 1.75+ and no system dependencies on Linux.
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get to a working state in minutes: launch SysWatch, learn the keyboard shortcuts, and navigate all twelve tabs.
+  </Card>
+  <Card title="Overview tab" icon="table-columns" href="/tabs/overview">
+    The Overview tab shows every subsystem at a glance and is the best place to start a diagnostic session.
+  </Card>
+  <Card title="Anomaly detection" icon="triangle-exclamation" href="/features/anomaly-detection">
+    How the Insights engine detects swap thrash, runaway processes, disk pressure, zombie parties, and more.
+  </Card>
+</CardGroup>

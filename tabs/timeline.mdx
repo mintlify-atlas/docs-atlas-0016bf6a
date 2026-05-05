@@ -1,0 +1,84 @@
+---
+title: 'Timeline Tab: Session History and Scrubbing'
+description: 'Browse 2 minutes of captured snapshots and rewind every panel to any past tick with arrow-key scrubbing. No daemons or log files required.'
+---
+
+The Timeline tab (`-`) is SysWatch's session recorder and time-travel interface. Every second the app is running, a full `Snapshot` is written into a bounded ring buffer. The Timeline tab lets you rewind to any of those snapshots and inspect the exact state of your system at that moment — CPU usage, running processes, disk pressure, memory — across every tab simultaneously.
+
+## The session ring
+
+SysWatch keeps a rolling window of **120 snapshots**, one per tick (default 1 Hz), giving you up to **2 minutes of history**. The ring is bounded: once full, the oldest sample is dropped to make room for the newest. No data is written to disk.
+
+Each entry in the ring is a complete `Snapshot` — the same structure every tab renders from. There is no lossy compression or aggregation; you see the same fidelity at `T-119s` as you do live.
+
+<Note>
+The ring starts empty when SysWatch launches. Scrubbing is available as soon as at least two snapshots have accumulated.
+</Note>
+
+## Scrubbing: rewinding time across all tabs
+
+Scrubbing changes the snapshot that every tab renders from. When `scrub_offset` is greater than zero, `App::displayed_snap()` returns the historical snapshot at that offset instead of the live one. You do not need to stay on the Timeline tab to keep scrubbing active — switching to CPU or Procs shows the same historical state.
+
+<Warning>
+Scrubbing affects **all tabs**. While a non-zero offset is active, every panel shows historical data. The header's live-state badge changes from **LIVE** to **SCRUB [offset]** to make this visible.
+</Warning>
+
+### Live-state indicator
+
+The header always shows the current live state:
+
+| State | Header label | When it appears |
+|---|---|---|
+| Live | `LIVE` | `scrub_offset` is 0 and the app is not paused |
+| Paused | `PAUSED` | `p` was pressed; collection is suspended |
+| Scrub | `SCRUB` + offset in seconds | `scrub_offset` > 0; you are inspecting a past tick |
+
+## How to scrub to a past event
+
+<Steps>
+  <Step title="Open the Timeline tab">
+    Press `-` to switch to the Timeline tab. The activity strips (CPU, memory, IO, net) show the full session window as sparklines.
+  </Step>
+  <Step title="Step backward with the left arrow">
+    Press `←` to move one tick back in time. The scrubber dot moves left and the status line below it shows the offset and the wall-clock timestamp of the selected snapshot. The header changes from **LIVE** to **SCRUB**.
+  </Step>
+  <Step title="Jump to the oldest sample">
+    Press `Home` to jump directly to the oldest available sample. The dot moves to the left edge of the scrubber bar.
+  </Step>
+  <Step title="Switch to any other tab">
+    Press `2` (CPU), `6` (Procs), or any other tab key. The tab renders the snapshot you scrubbed to — not the current live state. Use this to inspect the process list or CPU breakdown at the moment the event occurred.
+  </Step>
+  <Step title="Return to live">
+    Press `End` or keep pressing `→` until `scrub_offset` reaches 0. The header returns to **LIVE** and all tabs resume showing the current snapshot.
+  </Step>
+</Steps>
+
+## Keyboard shortcuts
+
+| Key | Action |
+|---|---|
+| `-` | Open the Timeline tab |
+| `←` | Step one tick back (increment offset) |
+| `→` | Step one tick forward toward live (decrement offset) |
+| `Home` | Jump to oldest available sample |
+| `End` | Jump to live (offset = 0) |
+| `p` | Pause / resume collection (freezes new snapshots) |
+
+## What the Timeline tab shows
+
+The tab has three panels stacked vertically.
+
+**Activity strips** — four sparklines covering the full session window, one row each for CPU (green), memory (yellow), disk IO (cyan), and network (magenta). When scrubbing, a `┃` cursor marks the selected tick inside each strip.
+
+**Event log** — a derived list of notable state changes visible in the session: top-CPU process changes (when the highest-CPU process switches from one tick to the next) and any currently active Insights (shown as `WARN`/`OK` entries at age 0). Rows are sorted newest first and labeled with their age in seconds.
+
+**Scrubber bar** — a horizontal timeline spanning the full session. The `●` dot shows the current scrub position. The left `│` edge is the oldest sample; the right `│` edge is live. The status line below the bar shows offset, count, and the wall-clock time of the selected snapshot.
+
+## Planned features (v0.2)
+
+The session ring is the foundation for features deferred to v0.2:
+
+- **Snapshot+Diff** (`S`/`D` footer keys) — compare two ticks side-by-side
+- **Recording/Replay** (`R`) — save a session to disk and replay it later
+
+These are not available in v0.1.

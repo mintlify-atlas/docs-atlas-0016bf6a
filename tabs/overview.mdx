@@ -1,0 +1,66 @@
+---
+title: 'Overview Tab — SysWatch Dashboard at a Glance'
+description: 'The Overview tab surfaces CPU, memory, swap, disk IO, and network rates in a single screen so you can see the health of every subsystem before drilling in.'
+---
+
+The Overview tab is the first screen you see when SysWatch starts. It is designed to answer one question immediately: *is anything wrong right now?* Five KPI tiles across the top, a per-core CPU panel and top-process table in the middle, and an Insights strip at the bottom give you a complete picture of the host without switching tabs.
+
+Press `1` to jump to Overview from any other tab, or use `Tab`/`Shift-Tab` to cycle to it.
+
+## Layout
+
+The tab is split into three horizontal bands.
+
+### KPI strip (top)
+
+Five equal-width tiles span the full width of the terminal:
+
+| Tile | Metric | Color thresholds |
+|------|--------|-----------------|
+| **CPU** | Aggregate usage % | Green < 60 % · Yellow ≥ 60 % · Red ≥ 85 % |
+| **MEM** | RAM used % of total | Green < 70 % · Yellow ≥ 70 % · Red ≥ 90 % |
+| **SWAP** | Swap used % of total | Green < 25 % · Yellow ≥ 25 % · Red ≥ 75 % |
+| **DISK IO** | Combined read + write rate (bytes/sec) | Cyan always |
+| **NET** | Combined rx + tx rate across all interfaces | Cyan always |
+
+Each tile shows the current value in large text, a single-row block bar reflecting the latest sample, and a sparkline beneath it drawn from the session ring buffer — so you can see the recent trend at a glance without opening the dedicated tab.
+
+### Body (middle)
+
+The body is split into two columns:
+
+- **Per-core CPU** (left, ~45 % width): A scrollable list of every logical core with its current utilization % and a color-coded block bar. Cores above 85 % appear red; 60–85 % yellow; below 60 % green.
+- **Top processes by CPU** (right, ~55 % width): A table showing PID, user, `%CPU`, RSS, and command name for the processes consuming the most CPU at the current tick. The list is sorted descending by CPU usage and truncated to the available terminal height.
+
+### Insights strip (bottom)
+
+The six-row strip at the bottom shows the active Insights across all subsystems. The panel title reads either `Insights — system nominal` when everything is healthy, or `Insights — N active (press [+] for detail)` when anomalies are detected.
+
+Each insight line shows a severity badge (`CRIT` / `WARN` / `INFO`) and a one-line description, followed by an arrow and the suggested tab to investigate further. Severity colors follow the same palette as the rest of the UI: red for CRIT, yellow for WARN, cyan for INFO.
+
+<Note>
+The Insights strip on the Overview tab only shows a preview. Press `+` to open the full Insights tab, which shows all anomaly cards with extended context and suggested actions.
+</Note>
+
+## Keyboard shortcuts
+
+| Key | Action |
+|-----|--------|
+| `1` | Jump directly to Overview |
+| `Tab` / `Shift-Tab` | Cycle to next / previous tab |
+| `←` / `→` | Scrub session history backward / forward |
+| `p` | Pause live collection |
+| `q` / `Ctrl-C` | Quit |
+
+## When to use this tab
+
+Use the Overview tab as your starting point whenever something feels off. The color-coded KPI tiles make it obvious which subsystem to investigate — a red MEM tile means open Memory (key `3`), a spiking DISK IO tile means open Disks (key `4`). The Insights strip often names the problem before you even look at the tiles.
+
+<CardGroup cols={2}>
+  <Card title="CPU & Memory" icon="microchip" href="/tabs/cpu-memory">
+    Per-core utilization, load averages, RAM pressure, and swap usage.
+  </Card>
+  <Card title="Disks & Filesystems" icon="hard-drive" href="/tabs/disks-filesystems">
+    Aggregate IO rates and per-mount usage for all block devices.
+  </Card>
+</CardGroup>
